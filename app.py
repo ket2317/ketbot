@@ -14,6 +14,7 @@ def create_app() -> Flask:
         level=Config.LOG_LEVEL,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logger = logging.getLogger(__name__)
 
     app = Flask(__name__)
     app.config["SECRET_KEY"] = Config.SECRET_KEY or "admin-disabled"
@@ -33,6 +34,13 @@ def create_app() -> Flask:
     init_db()
     with session_scope() as session:
         seed_initial_clients(session)
+
+    registered_routes = sorted(
+        f"{','.join(sorted(rule.methods - {'HEAD', 'OPTIONS'})) or 'OPTIONS'} {rule.rule}"
+        for rule in app.url_map.iter_rules()
+        if rule.endpoint != "static"
+    )
+    logger.info("registered_routes routes=%s", registered_routes)
 
     @app.after_request
     def add_vapi_friendly_headers(response):
