@@ -1,0 +1,68 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="ket-topbar">
+  <div class="ket-page-title">
+    <h1>Servicios</h1>
+    <p>{{ cliente.nombre }} · <code class="ket-code">{{ cliente.assistant_id }}</code></p>
+  </div>
+  <div class="ket-actions">
+    <a class="btn btn-outline-secondary" href="{{ url_for('admin.clients_index') }}"><i data-lucide="arrow-left"></i>Clientes</a>
+    <a class="btn btn-primary" href="{{ url_for('admin.service_new', client_id=cliente.id) }}"><i data-lucide="plus"></i>Crear servicio</a>
+  </div>
+</div>
+
+<section class="ket-card">
+  <div class="ket-table-toolbar">
+    <div>
+      <h2 class="h5 m-0">Catalogo de servicios</h2>
+      <p class="m-0 mt-1 text-secondary">Precios, duracion y estado operativo.</p>
+    </div>
+    <div class="ket-search">
+      <i data-lucide="search"></i>
+      <input type="search" placeholder="Buscar servicios..." data-ket-search="#services-table">
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table id="services-table" class="table align-middle ket-table">
+      <thead>
+        <tr>
+          <th>Servicio</th>
+          <th>Precio</th>
+          <th>Duracion</th>
+          <th>Estado</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for servicio in servicios %}
+        <tr>
+          <td><strong>{{ servicio.nombre }}</strong></td>
+          <td>{{ "$%.2f"|format(servicio.precio) if servicio.precio is not none else "Por confirmar" }}</td>
+          <td>{{ servicio.duracion_minutos }} min</td>
+          <td>
+            <span class="badge ket-status text-bg-{{ 'success' if servicio.activo else 'secondary' }}">
+              {{ "Activo" if servicio.activo else "Inactivo" }}
+            </span>
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm ket-btn-edit" href="{{ url_for('admin.service_edit', service_id=servicio.id) }}"><i data-lucide="pencil"></i>Editar</a>
+            <form class="d-inline" method="post" action="{{ url_for('admin.service_toggle', service_id=servicio.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm {{ 'ket-btn-deactivate' if servicio.activo else 'ket-btn-activate' }}" type="submit">
+                <i data-lucide="{{ 'power-off' if servicio.activo else 'power' }}"></i>{{ "Desactivar" if servicio.activo else "Activar" }}
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="ket-empty">Este cliente todavia no tiene servicios.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="ket-pagination">
+    <span>{{ servicios|length }} registros</span>
+    <span class="ket-page-pill">Pagina 1</span>
+  </div>
+</section>
+{% endblock %}

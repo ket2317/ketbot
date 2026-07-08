@@ -1,0 +1,142 @@
+import json
+from datetime import time
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from models import Cliente
+from config import Config
+
+
+class ClientLookupError(Exception):
+    pass
+
+
+class MissingAssistantIdError(ClientLookupError):
+    pass
+
+
+def normalize_vapi_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    for key in ("arguments", "args", "parameters", "input"):
+        nested = _decode_possible_json_object(payload.get(key))
+        if isinstance(nested, dict):
+            return {**payload, **nested}
+
+    message = payload.get("message")
+    if isinstance(message, dict):
+        tool_calls = message.get("toolCalls") or message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+                function_data = tool_calls[0].get("function", {})
+                arguments = _decode_possible_json_object(function_data.get("arguments"))
+                if isinstance(arguments, dict):
+                    return {**payload, **arguments}
+
+    return payload
+
+
+def extract_assistant_id(payload: dict[str, Any]) -> str | None:
+    candidates = [
+        payload.get("assistant_id"),
+        payload.get("assistantId"),
+        payload.get("assistant") if isinstance(payload.get("assistant"), str) else None,
+        _nested_id(payload.get("assistant")),
+    ]
+
+    message = payload.get("message")
+    if isinstance(message, dict):
+        candidates.extend(
+            [
+                message.get("assistantId"),
+                _nested_id(message.get("assistant")),
+            ]
+        )
+
+    call = payload.get("call")
+    if isinstance(call, dict):
+        candidates.extend([call.get("assistantId"), _nested_id(call.get("assistant"))])
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    return None
+
+
+def get_client_for_payload(session: Session, payload: dict[str, Any]) -> Cliente:
+    assistant_id = extract_assistant_id(payload)
+    if assistant_id:
+        return get_active_client_by_assistant_id(session, assistant_id)
+
+    raise MissingAssistantIdError("assistant_id requerido")
+
+
+def get_active_client_by_assistant_id(session: Session, assistant_id: str) -> Cliente:
+    client = session.scalar(select(Cliente).where(Cliente.assistant_id == assistant_id, Cliente.activo.is_(True)))
+    if client:
+        return client
+    raise ClientLookupError(f"No existe un cliente activo para assistant_id={assistant_id}.")
+
+
+def seed_initial_clients(session: Session) -> None:
+    _upsert_client(
+        session,
+        assistant_id=Config.RPM_ASSISTANT_ID,
+        nombre="RPM Automotive",
+        calendar_id=Config.RPM_CALENDAR_ID,
+        credentials_file=Config.RPM_CREDENTIALS_FILE,
+        credentials_env_var=Config.RPM_CREDENTIALS_ENV_VAR,
+        horario_inicio=time(8, 0),
+        horario_fin=time(18, 0),
+        timezone=Config.RPM_TIMEZONE,
+        telefono="",
+        direccion="",
+        prompt="Asistente de RPM Automotive para agendar citas de servicio automotriz.",
+        activo=True,
+    )
+    _upsert_client(
+        session,
+        assistant_id=Config.UNAS_ASSISTANT_ID,
+        nombre="Uñas La Comer",
+        calendar_id=Config.UNAS_CALENDAR_ID,
+        credentials_file=Config.UNAS_CREDENTIALS_FILE,
+        credentials_env_var=Config.UNAS_CREDENTIALS_ENV_VAR,
+        horario_inicio=time(8, 0),
+        horario_fin=time(22, 0),
+        timezone=Config.UNAS_TIMEZONE,
+        telefono="",
+        direccion="",
+        prompt="Asistente de Uñas La Comer para agendar citas.",
+        activo=True,
+    )
+
+
+def _upsert_client(session: Session, **data: Any) -> None:
+    client = session.scalar(select(Cliente).where(Cliente.assistant_id == data["assistant_id"]))
+    if client is None:
+        session.add(Cliente(**data))
+        return
+
+    if not client.credentials_env_var and data.get("credentials_env_var"):
+        client.credentials_env_var = data["credentials_env_var"]
+
+
+def _nested_id(value: Any) -> str | None:
+    if isinstance(value, dict):
+        nested = value.get("id")
+        return nested if isinstance(nested, str) else None
+    return None
+
+
+def _decode_possible_json_object(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    return decoded if isinstance(decoded, dict) else value

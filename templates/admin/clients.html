@@ -1,0 +1,103 @@
+{% extends "admin/base.html" %}
+{% block content %}
+{% set stats = namespace(active=0, services=0, appointments=0) %}
+{% for cliente in clientes %}
+  {% if cliente.activo %}
+    {% set stats.active = stats.active + 1 %}
+  {% endif %}
+  {% set stats.services = stats.services + (cliente.servicios|length) %}
+  {% set stats.appointments = stats.appointments + (cliente.citas|length) %}
+{% endfor %}
+
+<div class="ket-topbar">
+  <div class="ket-page-title">
+    <h1>Dashboard</h1>
+    <p>Gestiona clientes, servicios y configuracion operativa desde una consola moderna.</p>
+  </div>
+  <div class="ket-actions">
+    <a class="btn btn-primary" href="{{ url_for('admin.client_new') }}"><i data-lucide="plus"></i>Agregar Cliente</a>
+    <a class="btn btn-outline-secondary" href="#clientes"><i data-lucide="list"></i>Ver Clientes</a>
+  </div>
+</div>
+
+<section class="ket-stats" aria-label="Resumen">
+  <article class="ket-card ket-stat">
+    <div class="ket-stat-head"><i class="ket-stat-icon" data-lucide="building-2"></i>Clientes activos</div>
+    <div class="ket-stat-value">{{ stats.active }}</div>
+    <div class="ket-stat-note">{{ clientes|length }} clientes totales</div>
+  </article>
+  <article class="ket-card ket-stat">
+    <div class="ket-stat-head"><i class="ket-stat-icon" data-lucide="sparkles"></i>Servicios</div>
+    <div class="ket-stat-value">{{ stats.services }}</div>
+    <div class="ket-stat-note">Configurados en clientes</div>
+  </article>
+  <article class="ket-card ket-stat">
+    <div class="ket-stat-head"><i class="ket-stat-icon" data-lucide="calendar-days"></i>Citas hoy</div>
+    <div class="ket-stat-value">—</div>
+    <div class="ket-stat-note">Disponible al conectar analitica</div>
+  </article>
+  <article class="ket-card ket-stat">
+    <div class="ket-stat-head"><i class="ket-stat-icon" data-lucide="calendar-range"></i>Citas esta semana</div>
+    <div class="ket-stat-value">{{ stats.appointments }}</div>
+    <div class="ket-stat-note">Citas registradas</div>
+  </article>
+</section>
+
+<section id="clientes" class="ket-card">
+  <div class="ket-table-toolbar">
+    <div>
+      <h2 class="h5 m-0">Clientes</h2>
+      <p class="m-0 mt-1 text-secondary">Configuracion multi-cliente para Vapi y Google Calendar.</p>
+    </div>
+    <div class="ket-search">
+      <i data-lucide="search"></i>
+      <input type="search" placeholder="Buscar clientes..." data-ket-search="#clientes-table">
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table id="clientes-table" class="table align-middle ket-table">
+      <thead>
+        <tr>
+          <th>Negocio</th>
+          <th>Assistant ID</th>
+          <th>Horario</th>
+          <th>Timezone</th>
+          <th>Estado</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cliente in clientes %}
+        <tr>
+          <td><strong>{{ cliente.nombre }}</strong></td>
+          <td><code class="ket-code">{{ cliente.assistant_id }}</code></td>
+          <td>{{ cliente.horario_inicio.strftime("%H:%M") }} - {{ cliente.horario_fin.strftime("%H:%M") }}</td>
+          <td>{{ cliente.timezone }}</td>
+          <td>
+            <span class="badge ket-status text-bg-{{ 'success' if cliente.activo else 'secondary' }}">
+              {{ "Activo" if cliente.activo else "Inactivo" }}
+            </span>
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.services_index', client_id=cliente.id) }}"><i data-lucide="sparkles"></i>Servicios</a>
+            <a class="btn btn-sm ket-btn-edit" href="{{ url_for('admin.client_edit', client_id=cliente.id) }}"><i data-lucide="pencil"></i>Editar</a>
+            <form class="d-inline" method="post" action="{{ url_for('admin.client_toggle', client_id=cliente.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm {{ 'ket-btn-deactivate' if cliente.activo else 'ket-btn-activate' }}" type="submit">
+                <i data-lucide="{{ 'power-off' if cliente.activo else 'power' }}"></i>{{ "Desactivar" if cliente.activo else "Activar" }}
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="ket-empty">No hay clientes.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="ket-pagination">
+    <span>{{ clientes|length }} registros</span>
+    <span class="ket-page-pill">Pagina 1</span>
+  </div>
+</section>
+{% endblock %}
