@@ -1,7 +1,8 @@
 import logging
 import re
 import unicodedata
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Blueprint, jsonify, request
 
@@ -34,7 +35,7 @@ appointments_bp = Blueprint("appointments", __name__)
 INVALID_DATE_FORMAT_MESSAGE = "La fecha debe venir en formato YYYY-MM-DD."
 PAST_DATE_MESSAGE = "No se pueden agendar citas en fechas pasadas. Pide una fecha futura."
 DATE_FORMAT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-UNRESOLVED_DATE_MESSAGE = "No pude resolver la fecha. Pide al cliente una fecha más clara."
+UNRESOLVED_DATE_MESSAGE = "No pude determinar la fecha. Pide al cliente una fecha exacta."
 RELATIVE_DATES = {
     "hoy": 0,
     "manana": 1,
@@ -76,6 +77,10 @@ def error_response(message: str, status_code: int = 400, **extra):
     payload = {"success": False, "available": False, "message": message}
     payload.update(extra)
     return jsonify(payload), status_code
+
+
+def resolve_date_error_response(message: str = UNRESOLVED_DATE_MESSAGE, status_code: int = 400):
+    return jsonify({"success": False, "date": None, "message": message}), status_code
 
 
 def assistant_id_error_response():
@@ -136,6 +141,7 @@ def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> 
 def normalize_date_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value.strip().lower())
     ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    ascii_text = re.sub(r"[,.]", " ", ascii_text)
     return re.sub(r"\s+", " ", ascii_text).strip()
 
 
@@ -143,14 +149,19 @@ def resolve_date_text(date_text: str, today: date | None = None) -> date | None:
     current_date = today or date.today()
     normalized = normalize_date_text(date_text)
 
+    iso_date = _resolve_iso_date(normalized, current_date)
+    if iso_date:
+        return iso_date
+
     if normalized in RELATIVE_DATES:
         return current_date + timedelta(days=RELATIVE_DATES[normalized])
 
-    if normalized in WEEKDAYS:
-        days_ahead = (WEEKDAYS[normalized] - current_date.weekday()) % 7
-        if days_ahead == 0:
-            days_ahead = 7
-        return current_date + timedelta(days=days_ahead)
+    if normalized == "proxima semana":
+        return current_date + timedelta(days=(7 - current_date.weekday()))
+
+    weekday = _extract_weekday(normalized)
+    if weekday is not None:
+        return _next_weekday(current_date, weekday)
 
     month_match = re.fullmatch(r"(\d{1,2})(?:\s+de)?\s+([a-z]+)", normalized)
     if month_match:
@@ -167,7 +178,62 @@ def resolve_date_text(date_text: str, today: date | None = None) -> date | None:
             if resolved >= current_date:
                 return resolved
 
+    numeric_match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})", normalized)
+    if numeric_match:
+        day = int(numeric_match.group(1))
+        month = int(numeric_match.group(2))
+        return _next_month_day(current_date, month, day)
+
     return None
+
+
+def _resolve_iso_date(value: str, current_date: date) -> date | None:
+    if not DATE_FORMAT_RE.fullmatch(value):
+        return None
+
+    try:
+        resolved = date.fromisoformat(value)
+    except ValueError:
+        return None
+
+    return resolved if resolved >= current_date else None
+
+
+def _extract_weekday(value: str) -> int | None:
+    weekday_text = value
+    for prefix in ("este ", "esta ", "proximo ", "proxima "):
+        if weekday_text.startswith(prefix):
+            weekday_text = weekday_text.removeprefix(prefix)
+            break
+
+    return WEEKDAYS.get(weekday_text)
+
+
+def _next_weekday(current_date: date, weekday: int) -> date:
+    days_ahead = (weekday - current_date.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    return current_date + timedelta(days=days_ahead)
+
+
+def _next_month_day(current_date: date, month: int, day: int) -> date | None:
+    for year in (current_date.year, current_date.year + 1):
+        try:
+            resolved = date(year, month, day)
+        except ValueError:
+            return None
+        if resolved >= current_date:
+            return resolved
+
+    return None
+
+
+def client_today(timezone: str) -> date:
+    try:
+        return datetime.now(ZoneInfo(timezone)).date()
+    except ZoneInfoNotFoundError:
+        logger.warning("invalid_client_timezone endpoint=/resolve-date timezone=%s", timezone)
+        return date.today()
 
 
 @appointments_bp.get("/")
@@ -384,7 +450,7 @@ def resolve_date_route():
     assistant_id = extract_assistant_id(payload)
     date_text = str(payload.get("date_text") or payload.get("dateText") or "").strip()
     logger.info(
-        "request endpoint=/resolve-date assistant_id=%s date_text=%s",
+        "resolve_date_request endpoint=/resolve-date assistant_id=%s date_text=%s",
         assistant_id or "missing",
         date_text or "missing",
     )
@@ -395,29 +461,32 @@ def resolve_date_route():
     missing_error = require_fields({"date_text": date_text}, ["date_text"])
     if missing_error:
         logger.warning("validation_error endpoint=/resolve-date assistant_id=%s error=%s", assistant_id, missing_error)
-        return error_response(missing_error, 400)
+        return resolve_date_error_response()
 
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
-            resolved_date = resolve_date_text(date_text)
+            today = client_today(cliente.timezone)
+            resolved_date = resolve_date_text(date_text, today)
             if resolved_date is None:
                 logger.warning(
-                    "date_resolution_failed endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s today=%s",
+                    "resolve_date_failed endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s today=%s timezone=%s",
                     assistant_id,
                     cliente.id,
                     date_text,
-                    date.today().isoformat(),
+                    today.isoformat(),
+                    cliente.timezone,
                 )
-                return error_response(UNRESOLVED_DATE_MESSAGE, 400)
+                return resolve_date_error_response()
 
             logger.info(
-                "date_resolved endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s resolved_date=%s today=%s",
+                "resolve_date_success endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s resolved_date=%s today=%s timezone=%s",
                 assistant_id,
                 cliente.id,
                 date_text,
                 resolved_date.isoformat(),
-                date.today().isoformat(),
+                today.isoformat(),
+                cliente.timezone,
             )
     except MissingAssistantIdError:
         logger.warning("validation_error endpoint=/resolve-date assistant_id=missing error=assistant_id requerido")
