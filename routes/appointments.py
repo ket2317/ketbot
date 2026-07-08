@@ -1,4 +1,6 @@
 import logging
+import re
+from datetime import date
 
 from flask import Blueprint, jsonify, request
 
@@ -28,6 +30,9 @@ from services import (
 
 logger = logging.getLogger(__name__)
 appointments_bp = Blueprint("appointments", __name__)
+INVALID_DATE_FORMAT_MESSAGE = "La fecha debe venir en formato YYYY-MM-DD."
+PAST_DATE_MESSAGE = "No se pueden agendar citas en fechas pasadas. Pide una fecha futura."
+DATE_FORMAT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def cors_preflight_response():
@@ -59,6 +64,42 @@ def get_json_payload():
 
 def get_query_payload() -> dict:
     return normalize_vapi_payload(dict(request.args))
+
+
+def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> tuple[date | None, tuple | None]:
+    raw_fecha = str(payload.get("fecha", "")).strip()
+    if not DATE_FORMAT_RE.fullmatch(raw_fecha):
+        logger.warning(
+            "invalid_date_format endpoint=%s assistant_id=%s fecha=%s",
+            endpoint,
+            assistant_id,
+            raw_fecha or "missing",
+        )
+        return None, error_response(INVALID_DATE_FORMAT_MESSAGE, 400)
+
+    try:
+        requested_date = date.fromisoformat(raw_fecha)
+    except ValueError:
+        logger.warning(
+            "invalid_date_format endpoint=%s assistant_id=%s fecha=%s",
+            endpoint,
+            assistant_id,
+            raw_fecha or "missing",
+        )
+        return None, error_response(INVALID_DATE_FORMAT_MESSAGE, 400)
+
+    today = date.today()
+    if requested_date < today:
+        logger.warning(
+            "past_date_rejected endpoint=%s assistant_id=%s fecha=%s today=%s",
+            endpoint,
+            assistant_id,
+            requested_date.isoformat(),
+            today.isoformat(),
+        )
+        return None, error_response(PAST_DATE_MESSAGE, 400)
+
+    return requested_date, None
 
 
 @appointments_bp.get("/")
@@ -101,6 +142,10 @@ def check_availability():
             missing_error,
         )
         return error_response(missing_error, 400)
+
+    _, date_error = validate_requested_date(payload, "/check-availability", assistant_id)
+    if date_error:
+        return date_error
 
     try:
         with session_scope() as session:
@@ -195,6 +240,10 @@ def create_appointment_route():
             missing_error,
         )
         return error_response(missing_error, 400)
+
+    _, date_error = validate_requested_date(payload, "/create-appointment", assistant_id)
+    if date_error:
+        return date_error
 
     try:
         with session_scope() as session:
