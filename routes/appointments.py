@@ -1,6 +1,7 @@
 import logging
 import re
-from datetime import date
+import unicodedata
+from datetime import date, timedelta
 
 from flask import Blueprint, jsonify, request
 
@@ -33,6 +34,36 @@ appointments_bp = Blueprint("appointments", __name__)
 INVALID_DATE_FORMAT_MESSAGE = "La fecha debe venir en formato YYYY-MM-DD."
 PAST_DATE_MESSAGE = "No se pueden agendar citas en fechas pasadas. Pide una fecha futura."
 DATE_FORMAT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+UNRESOLVED_DATE_MESSAGE = "No pude resolver la fecha. Pide al cliente una fecha más clara."
+RELATIVE_DATES = {
+    "hoy": 0,
+    "manana": 1,
+    "pasado manana": 2,
+}
+WEEKDAYS = {
+    "lunes": 0,
+    "martes": 1,
+    "miercoles": 2,
+    "jueves": 3,
+    "viernes": 4,
+    "sabado": 5,
+    "domingo": 6,
+}
+MONTHS = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
 
 
 def cors_preflight_response():
@@ -102,13 +133,56 @@ def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> 
     return requested_date, None
 
 
+def normalize_date_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip().lower())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", ascii_text).strip()
+
+
+def resolve_date_text(date_text: str, today: date | None = None) -> date | None:
+    current_date = today or date.today()
+    normalized = normalize_date_text(date_text)
+
+    if normalized in RELATIVE_DATES:
+        return current_date + timedelta(days=RELATIVE_DATES[normalized])
+
+    if normalized in WEEKDAYS:
+        days_ahead = (WEEKDAYS[normalized] - current_date.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return current_date + timedelta(days=days_ahead)
+
+    month_match = re.fullmatch(r"(\d{1,2})(?:\s+de)?\s+([a-z]+)", normalized)
+    if month_match:
+        day = int(month_match.group(1))
+        month = MONTHS.get(month_match.group(2))
+        if month is None:
+            return None
+
+        for year in (current_date.year, current_date.year + 1):
+            try:
+                resolved = date(year, month, day)
+            except ValueError:
+                return None
+            if resolved >= current_date:
+                return resolved
+
+    return None
+
+
 @appointments_bp.get("/")
 def healthcheck():
     return jsonify(
         {
             "ok": True,
             "service": "vapi-flask-calendar",
-            "endpoints": ["/check-availability", "/create-appointment", "/get-services", "/client-prompt"],
+            "endpoints": [
+                "/check-availability",
+                "/create-appointment",
+                "/resolve-date",
+                "/get-services",
+                "/client-prompt",
+            ],
         }
     )
 
@@ -293,6 +367,70 @@ def create_appointment_route():
             "success": True,
             "message": f"Cita agendada para {payload['nombre']} el {payload['fecha']} a las {payload['hora']}.",
             "calendar_link": event.get("htmlLink", ""),
+        }
+    )
+
+
+@appointments_bp.route("/resolve-date", methods=["POST", "OPTIONS"])
+def resolve_date_route():
+    if request.method == "OPTIONS":
+        return cors_preflight_response()
+
+    payload, error = get_json_payload()
+    if error:
+        logger.warning("validation_error endpoint=/resolve-date error=%s", error)
+        return error_response(error, 415 if "Content-Type" in error else 400)
+
+    assistant_id = extract_assistant_id(payload)
+    date_text = str(payload.get("date_text") or payload.get("dateText") or "").strip()
+    logger.info(
+        "request endpoint=/resolve-date assistant_id=%s date_text=%s",
+        assistant_id or "missing",
+        date_text or "missing",
+    )
+    if not assistant_id:
+        logger.warning("validation_error endpoint=/resolve-date assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+
+    missing_error = require_fields({"date_text": date_text}, ["date_text"])
+    if missing_error:
+        logger.warning("validation_error endpoint=/resolve-date assistant_id=%s error=%s", assistant_id, missing_error)
+        return error_response(missing_error, 400)
+
+    try:
+        with session_scope() as session:
+            cliente = get_client_for_payload(session, payload)
+            resolved_date = resolve_date_text(date_text)
+            if resolved_date is None:
+                logger.warning(
+                    "date_resolution_failed endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s today=%s",
+                    assistant_id,
+                    cliente.id,
+                    date_text,
+                    date.today().isoformat(),
+                )
+                return error_response(UNRESOLVED_DATE_MESSAGE, 400)
+
+            logger.info(
+                "date_resolved endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s resolved_date=%s today=%s",
+                assistant_id,
+                cliente.id,
+                date_text,
+                resolved_date.isoformat(),
+                date.today().isoformat(),
+            )
+    except MissingAssistantIdError:
+        logger.warning("validation_error endpoint=/resolve-date assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+    except ClientLookupError as exc:
+        logger.warning("client_lookup_error endpoint=/resolve-date assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 404)
+
+    return jsonify(
+        {
+            "success": True,
+            "date": resolved_date.isoformat(),
+            "message": "Fecha resuelta correctamente.",
         }
     )
 
