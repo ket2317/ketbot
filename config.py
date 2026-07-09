@@ -45,3 +45,8 @@ class Config:
     UNAS_CREDENTIALS_FILE: str = os.getenv("UNAS_CREDENTIALS_FILE", "credentials/unas_la_comer.json")
     UNAS_CREDENTIALS_ENV_VAR: str = os.getenv("UNAS_CREDENTIALS_ENV_VAR", "GOOGLE_CREDENTIALS_UNAS_LA_COMER_JSON")
     UNAS_TIMEZONE: str = os.getenv("UNAS_TIMEZONE", "America/Mexico_City")
+
+    WHATSAPP_VERIFY_TOKEN: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    WHATSAPP_TOKEN: str = os.getenv("WHATSAPP_TOKEN", "")
+    WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v20.0")

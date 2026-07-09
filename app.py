@@ -6,7 +6,7 @@ from flask_cors import CORS
 from clients import seed_initial_clients
 from config import Config
 from database import init_db, session_scope
-from routes import admin_bp, appointments_bp
+from routes import admin_bp, appointments_bp, whatsapp_bp
 
 
 def create_app() -> Flask:
@@ -29,6 +29,7 @@ def create_app() -> Flask:
         max_age=86400,
     )
     app.register_blueprint(appointments_bp)
+    app.register_blueprint(whatsapp_bp)
     app.register_blueprint(admin_bp)
 
     init_db()

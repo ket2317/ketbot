@@ -111,6 +111,27 @@ Si falta `assistant_id`, el backend responde:
 }
 ```
 
+## Configurar WhatsApp Cloud API
+
+Variables necesarias:
+
+```env
+WHATSAPP_VERIFY_TOKEN=
+WHATSAPP_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_API_VERSION=v20.0
+```
+
+No pongas tokens reales en el README. Define esos valores en `.env` local o en Render.
+
+En Meta WhatsApp Cloud API configura el webhook:
+
+```text
+GET/POST https://TU-DOMINIO/whatsapp
+```
+
+El backend usa `WHATSAPP_VERIFY_TOKEN` para verificar el webhook y responde mensajes entrantes con `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
+
 ## Endpoints
 
 ### `POST /check-availability`
