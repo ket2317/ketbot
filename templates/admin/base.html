@@ -3,12 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ title or "Admin" }} - KetBot Admin</title>
+    <title>{{ title or "KET" }} - KET</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='ket-tokens.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='ket-components.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='admin.css') }}" rel="stylesheet">
   </head>
   <body>
@@ -17,34 +19,30 @@
         <a class="ket-brand" href="{{ url_for('admin.clients_index') }}">
           <span class="ket-mark">K</span>
           <span class="ket-brand-text">
-            <strong>KetBot Admin</strong>
-            <span>Voice agents OS</span>
+            <strong>KET</strong>
           </span>
         </a>
-        <a class="ket-new-client" href="{{ url_for('admin.client_new') }}">
+        <a class="ket-button ket-button-primary ket-button-block" href="{{ url_for('admin.client_new') }}">
           <i data-lucide="plus"></i>
           Nuevo Cliente
         </a>
         <nav class="ket-nav">
-          <a class="active" href="{{ url_for('admin.clients_index') }}"><i data-lucide="layout-dashboard"></i><span>Dashboard</span></a>
-          <a href="{{ url_for('admin.clients_index') }}#clientes"><i data-lucide="building-2"></i><span>Clientes</span></a>
+          <a class="active" href="{{ url_for('admin.clients_index') }}"><i data-lucide="building-2"></i><span>Clientes</span></a>
           <a href="{{ url_for('admin.clients_index') }}#clientes"><i data-lucide="sparkles"></i><span>Servicios</span></a>
           <a href="{{ url_for('admin.clients_index') }}"><i data-lucide="settings"></i><span>Configuracion</span></a>
-          <a href="{{ url_for('admin.clients_index') }}"><i data-lucide="scroll-text"></i><span>Logs</span></a>
+          <a href="{{ url_for('admin.clients_index') }}"><i data-lucide="activity"></i><span>Actividad</span></a>
         </nav>
-        <div class="ket-sidebar-footer">
-          <span>Vapi + Google Calendar</span>
-          <strong>Plataforma multi-cliente</strong>
-        </div>
       </aside>
       <main class="ket-main">
         <div class="ket-content">
           {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
               {% for category, message in messages %}
-                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                <div class="ket-alert alert alert-{{ category }} alert-dismissible fade show" role="alert">
                   {{ message }}
-                  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Cerrar"></button>
+                  <button type="button" class="ket-alert-close" data-bs-dismiss="alert" aria-label="Cerrar">
+                    <i data-lucide="x"></i>
+                  </button>
                 </div>
               {% endfor %}
             {% endif %}

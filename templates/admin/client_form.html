@@ -1,60 +1,60 @@
 {% extends "admin/base.html" %}
 {% block content %}
 <div class="ket-form-shell">
-  <div class="ket-topbar">
+  <div class="ket-page-header">
     <div class="ket-page-title">
       <h1>{{ title }}</h1>
-      <p>Datos operativos del cliente y configuracion de Vapi.</p>
+      <p>Datos operativos del cliente y configuración de Vapi.</p>
     </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('admin.clients_index') }}"><i data-lucide="x"></i>Cerrar</a>
+    <a class="ket-button ket-button-secondary" href="{{ url_for('admin.clients_index') }}"><i data-lucide="x"></i>Cerrar</a>
   </div>
 
-  <form method="post" class="ket-card ket-modal-card">
+  <form method="post" class="ket-card ket-form-card">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row g-3 ket-form-grid">
       <div class="col-md-6">
         <label class="form-label">Nombre del negocio</label>
-        <input class="form-control" name="nombre" value="{{ cliente.nombre if cliente else '' }}" required>
+        <input class="ket-input" name="nombre" value="{{ cliente.nombre if cliente else '' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Assistant ID</label>
-        <input class="form-control" name="assistant_id" value="{{ cliente.assistant_id if cliente else '' }}" required>
+        <input class="ket-input" name="assistant_id" value="{{ cliente.assistant_id if cliente else '' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Calendar ID</label>
-        <input class="form-control" name="calendar_id" value="{{ cliente.calendar_id if cliente else '' }}" required>
+        <input class="ket-input" name="calendar_id" value="{{ cliente.calendar_id if cliente else '' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Credentials file</label>
-        <input class="form-control" name="credentials_file" value="{{ cliente.credentials_file if cliente else 'credentials/cliente.json' }}" required>
+        <input class="ket-input" name="credentials_file" value="{{ cliente.credentials_file if cliente else 'credentials/cliente.json' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Credentials env var</label>
-        <input class="form-control" name="credentials_env_var" value="{{ cliente.credentials_env_var if cliente else '' }}" placeholder="GOOGLE_CREDENTIALS_CLIENTE_JSON">
+        <input class="ket-input" name="credentials_env_var" value="{{ cliente.credentials_env_var if cliente else '' }}" placeholder="GOOGLE_CREDENTIALS_CLIENTE_JSON">
       </div>
       <div class="col-md-3">
         <label class="form-label">Horario inicio</label>
-        <input class="form-control" type="time" name="horario_inicio" value="{{ cliente.horario_inicio.strftime('%H:%M') if cliente else '09:00' }}" required>
+        <input class="ket-input" type="time" name="horario_inicio" value="{{ cliente.horario_inicio.strftime('%H:%M') if cliente else '09:00' }}" required>
       </div>
       <div class="col-md-3">
         <label class="form-label">Horario fin</label>
-        <input class="form-control" type="time" name="horario_fin" value="{{ cliente.horario_fin.strftime('%H:%M') if cliente else '18:00' }}" required>
+        <input class="ket-input" type="time" name="horario_fin" value="{{ cliente.horario_fin.strftime('%H:%M') if cliente else '18:00' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Timezone</label>
-        <input class="form-control" name="timezone" value="{{ cliente.timezone if cliente else 'America/Mexico_City' }}" required>
+        <input class="ket-input" name="timezone" value="{{ cliente.timezone if cliente else 'America/Mexico_City' }}" required>
       </div>
       <div class="col-md-6">
         <label class="form-label">Telefono</label>
-        <input class="form-control" name="telefono" value="{{ cliente.telefono if cliente else '' }}">
+        <input class="ket-input" name="telefono" value="{{ cliente.telefono if cliente else '' }}">
       </div>
       <div class="col-md-6">
         <label class="form-label">Direccion</label>
-        <input class="form-control" name="direccion" value="{{ cliente.direccion if cliente else '' }}">
+        <input class="ket-input" name="direccion" value="{{ cliente.direccion if cliente else '' }}">
       </div>
       <div class="col-12">
         <label class="form-label">Notas para prompt</label>
-        <textarea class="form-control" name="prompt" rows="4">{{ cliente.prompt if cliente else '' }}</textarea>
+        <textarea class="ket-input" name="prompt" rows="4">{{ cliente.prompt if cliente else '' }}</textarea>
       </div>
       <div class="col-12">
         <div class="form-check">
@@ -64,8 +64,8 @@
       </div>
     </div>
     <div class="ket-actions justify-content-end mt-4">
-      <a class="btn btn-outline-secondary" href="{{ url_for('admin.clients_index') }}">Cancelar</a>
-      <button class="btn btn-primary" type="submit"><i data-lucide="save"></i>Guardar</button>
+      <a class="ket-button ket-button-secondary" href="{{ url_for('admin.clients_index') }}">Cancelar</a>
+      <button class="ket-button ket-button-primary" type="submit"><i data-lucide="save"></i>Guardar</button>
     </div>
   </form>
 </div>

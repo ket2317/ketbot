@@ -1,208 +1,59 @@
 {% extends "admin/base.html" %}
 {% block content %}
-{% set stats = namespace(active=0, services=0, appointments=0, online=0) %}
-{% for cliente in clientes %}
-  {% if cliente.activo %}
-    {% set stats.active = stats.active + 1 %}
-    {% set stats.online = stats.online + 1 %}
-  {% endif %}
-  {% set stats.services = stats.services + (cliente.servicios|length) %}
-  {% set stats.appointments = stats.appointments + (cliente.citas|length) %}
-{% endfor %}
-
-<section class="ket-hero">
+<section class="ket-page-header">
   <div>
-    <div class="ket-eyebrow">
-      <span class="ket-live-dot"></span>
-      Sistema operativo
-    </div>
-    <h1>Buenos días, Ket 👋</h1>
-    <p>
-      Tienes {{ stats.active }} clientes activos, {{ stats.appointments }} citas esta semana
-      y {{ stats.online }} asistentes funcionando.
-    </p>
+    <p class="ket-kicker">KET</p>
+    <h1 class="ket-title-1">Clientes</h1>
   </div>
-  <div class="ket-actions ket-hero-actions">
-    <a class="btn btn-primary" href="{{ url_for('admin.client_new') }}"><i data-lucide="plus"></i>Agregar Cliente</a>
-    <a class="btn btn-outline-secondary" href="#clientes"><i data-lucide="arrow-down"></i>Ver Clientes</a>
-  </div>
+  <a class="ket-button ket-button-primary" href="{{ url_for('admin.client_new') }}">
+    <i data-lucide="plus"></i>
+    Nuevo Cliente
+  </a>
 </section>
 
-<section class="ket-system-strip" aria-label="Estado del sistema">
-  <div class="ket-system-item">
-    <i data-lucide="bot"></i>
-    <span>{{ stats.online }} asistentes online</span>
-  </div>
-  <div class="ket-system-item">
-    <i data-lucide="calendar-check"></i>
-    <span>Google Calendar conectado</span>
-  </div>
-  <div class="ket-system-item">
-    <i data-lucide="radio-tower"></i>
-    <span>Vapi conectado</span>
-  </div>
-  <div class="ket-system-item">
-    <i data-lucide="shield-check"></i>
-    <span>Admin protegido</span>
-  </div>
-</section>
-
-<section class="ket-stats" aria-label="Resumen">
-  <article class="ket-card ket-stat">
-    <div class="ket-stat-badge"><i data-lucide="building-2"></i></div>
-    <div class="ket-stat-content">
-      <span>Clientes activos</span>
-      <strong>{{ stats.active }}</strong>
-      <small>{{ clientes|length }} clientes totales</small>
-    </div>
-  </article>
-  <article class="ket-card ket-stat">
-    <div class="ket-stat-badge"><i data-lucide="sparkles"></i></div>
-    <div class="ket-stat-content">
-      <span>Servicios</span>
-      <strong>{{ stats.services }}</strong>
-      <small>Configurados en clientes</small>
-    </div>
-  </article>
-  <article class="ket-card ket-stat">
-    <div class="ket-stat-badge"><i data-lucide="calendar-days"></i></div>
-    <div class="ket-stat-content">
-      <span>Citas hoy</span>
-      <strong>--</strong>
-      <small>Disponible al conectar analitica</small>
-    </div>
-  </article>
-  <article class="ket-card ket-stat">
-    <div class="ket-stat-badge"><i data-lucide="calendar-range"></i></div>
-    <div class="ket-stat-content">
-      <span>Citas esta semana</span>
-      <strong>{{ stats.appointments }}</strong>
-      <small>+2 este mes</small>
-    </div>
-  </article>
-</section>
-
-<div class="ket-dashboard-grid">
-  <section id="clientes" class="ket-card ket-panel">
-    <div class="ket-table-toolbar">
+<section id="clientes" class="ket-grid ket-client-grid">
+  {% for cliente in clientes %}
+  <article class="ket-card ket-client-card" data-search-row>
+    <div class="ket-card-header">
       <div>
-        <h2>Clientes</h2>
-        <p>Configuracion multi-cliente para Vapi y Google Calendar.</p>
+        <h2 class="ket-title-4">{{ cliente.nombre }}</h2>
+        <p class="ket-text-muted">Agente de voz</p>
       </div>
-      <div class="ket-search">
-        <i data-lucide="search"></i>
-        <input type="search" placeholder="Buscar clientes..." data-ket-search="#clientes-list">
+      <span class="ket-badge {{ 'ket-badge-success' if cliente.activo else 'ket-badge-muted' }}">
+        {{ "Activo" if cliente.activo else "Inactivo" }}
+      </span>
+    </div>
+
+    <div class="ket-client-details">
+      <div>
+        <span>Horario</span>
+        <strong>{{ cliente.horario_inicio.strftime("%H:%M") }} - {{ cliente.horario_fin.strftime("%H:%M") }}</strong>
+      </div>
+      <div>
+        <span>Zona horaria</span>
+        <strong>{{ cliente.timezone }}</strong>
+      </div>
+      <div>
+        <span>Teléfono</span>
+        <strong>{{ cliente.telefono or "Sin teléfono" }}</strong>
       </div>
     </div>
 
-    <div id="clientes-list" class="ket-client-list">
-      {% for cliente in clientes %}
-      <article class="ket-client-row" data-search-row>
-        <div class="ket-client-main">
-          <div class="ket-client-avatar">{{ cliente.nombre[:1] }}</div>
-          <div>
-            <h3>{{ cliente.nombre }}</h3>
-            <div class="ket-client-meta">
-              <span><i data-lucide="fingerprint"></i>{{ cliente.assistant_id }}</span>
-              <span><i data-lucide="clock-3"></i>{{ cliente.horario_inicio.strftime("%H:%M") }} - {{ cliente.horario_fin.strftime("%H:%M") }}</span>
-              <span><i data-lucide="globe-2"></i>{{ cliente.timezone }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="ket-client-side">
-          <span class="ket-status {{ 'is-active' if cliente.activo else 'is-muted' }}">
-            <span></span>{{ "Activo" if cliente.activo else "Inactivo" }}
-          </span>
-          <div class="dropdown ket-row-menu">
-            <button class="ket-icon-button" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Acciones de {{ cliente.nombre }}">
-              <i data-lucide="more-horizontal"></i>
-            </button>
-            <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end ket-dropdown">
-              <li>
-                <a class="dropdown-item" href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">
-                  <i data-lucide="pencil"></i>Editar
-                </a>
-              </li>
-              <li>
-                <a class="dropdown-item" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">
-                  <i data-lucide="sparkles"></i>Servicios
-                </a>
-              </li>
-              <li>
-                <button class="dropdown-item" type="button" disabled>
-                  <i data-lucide="copy"></i>Duplicar
-                </button>
-              </li>
-              <li><hr class="dropdown-divider"></li>
-              <li>
-                <form method="post" action="{{ url_for('admin.client_toggle', client_id=cliente.id) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button class="dropdown-item {{ 'ket-menu-danger' if cliente.activo else '' }}" type="submit">
-                    <i data-lucide="{{ 'power-off' if cliente.activo else 'power' }}"></i>{{ "Desactivar" if cliente.activo else "Activar" }}
-                  </button>
-                </form>
-              </li>
-              <li>
-                <button class="dropdown-item ket-menu-danger" type="button" disabled>
-                  <i data-lucide="trash-2"></i>Eliminar
-                </button>
-              </li>
-            </ul>
-          </div>
-        </div>
-      </article>
-      {% else %}
-      <div class="ket-empty-state">
-        <i data-lucide="bot"></i>
-        <h3>No hay clientes todavia</h3>
-        <p>Crea tu primer cliente para conectar Vapi, Google Calendar y servicios.</p>
-        <a class="btn btn-primary" href="{{ url_for('admin.client_new') }}"><i data-lucide="plus"></i>Agregar Cliente</a>
-      </div>
-      {% endfor %}
+    <div class="ket-card-actions">
+      <a class="ket-button ket-button-secondary" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">
+        Entrar
+      </a>
     </div>
-
-    <div class="ket-pagination">
-      <span>{{ clientes|length }} registros</span>
-      <span class="ket-page-pill">Pagina 1</span>
-    </div>
-  </section>
-
-  <aside class="ket-card ket-activity">
-    <div class="ket-panel-heading">
-      <h2>Actividad reciente</h2>
-      <span>Live</span>
-    </div>
-    <div class="ket-activity-list">
-      <div class="ket-activity-item">
-        <span class="ket-activity-icon"><i data-lucide="phone-call"></i></span>
-        <div>
-          <strong>Ultima llamada</strong>
-          <p>Lista para conectarse desde Vapi.</p>
-        </div>
-      </div>
-      <div class="ket-activity-item">
-        <span class="ket-activity-icon"><i data-lucide="calendar-plus"></i></span>
-        <div>
-          <strong>Ultima cita creada</strong>
-          <p>{{ stats.appointments }} citas registradas en la plataforma.</p>
-        </div>
-      </div>
-      <div class="ket-activity-item">
-        <span class="ket-activity-icon"><i data-lucide="building-2"></i></span>
-        <div>
-          <strong>Cliente actualizado</strong>
-          <p>{{ clientes[0].nombre if clientes else "Sin clientes" }}</p>
-        </div>
-      </div>
-      <div class="ket-activity-item">
-        <span class="ket-activity-icon is-green"><i data-lucide="check-circle-2"></i></span>
-        <div>
-          <strong>Estado del sistema</strong>
-          <p>Operativo y listo para produccion.</p>
-        </div>
-      </div>
-    </div>
-  </aside>
-</div>
+  </article>
+  {% else %}
+  <div class="ket-card ket-empty-state">
+    <h2 class="ket-title-4">No hay clientes</h2>
+    <p class="ket-text-muted">Crea un cliente para configurar su asistente, calendario y servicios.</p>
+    <a class="ket-button ket-button-primary" href="{{ url_for('admin.client_new') }}">
+      <i data-lucide="plus"></i>
+      Nuevo Cliente
+    </a>
+  </div>
+  {% endfor %}
+</section>
 {% endblock %}
