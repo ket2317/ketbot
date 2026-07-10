@@ -15,7 +15,9 @@ from date_resolver import DATE_FORMAT_RE, client_today, resolve_date_text
 from database import session_scope
 from prompt_service import generate_client_prompt
 from services import (
+    AppointmentClarificationError,
     AvailabilityError,
+    cancel_appointment,
     check_client_availability,
     create_appointment,
     get_active_services,
@@ -25,6 +27,7 @@ from services import (
     require_fields,
     serialize_service,
     ServiceNotFoundError,
+    update_appointment,
 )
 
 
@@ -106,6 +109,60 @@ def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> 
     return requested_date, None
 
 
+def wrong_create_tool_response(payload: dict) -> dict | None:
+    text = request_context_text(payload)
+    if not text:
+        return None
+
+    normalized = " ".join(text.lower().split())
+    cancel_words = (
+        "cancelar", "cancela", "cancel", "eliminar", "elimina", "borrar",
+        "borra", "ya no voy", "no asistir", "no voy a asistir",
+    )
+    update_words = (
+        "reagendar", "reagenda", "cambiar", "cambia", "mover", "mueve",
+        "modificar", "modifica", "actualizar", "actualiza",
+    )
+
+    if any(word in normalized for word in cancel_words):
+        return {
+            "success": False,
+            "wrong_tool": True,
+            "expected_tool": "cancel_appointment",
+            "message": "Esta solicitud parece ser para cancelar una cita existente. Usa la herramienta cancel_appointment.",
+        }
+
+    if any(word in normalized for word in update_words):
+        return {
+            "success": False,
+            "wrong_tool": True,
+            "expected_tool": "update_appointment",
+            "message": "Esta solicitud parece ser para cambiar una cita existente. Usa la herramienta update_appointment.",
+        }
+
+    return None
+
+
+def request_context_text(payload: dict) -> str:
+    fields = ("intent", "action", "mensaje", "message", "user_message", "transcript", "context")
+    parts = []
+    for field in fields:
+        value = payload.get(field)
+        if value is not None:
+            parts.append(stringify_context_value(value))
+    return " ".join(part for part in parts if part)
+
+
+def stringify_context_value(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(stringify_context_value(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(stringify_context_value(item) for item in value)
+    return str(value)
+
+
 @appointments_bp.get("/")
 def healthcheck():
     return jsonify(
@@ -115,6 +172,8 @@ def healthcheck():
             "endpoints": [
                 "/check-availability",
                 "/create-appointment",
+                "/update-appointment",
+                "/cancel-appointment",
                 "/resolve-date",
                 "/get-services",
                 "/client-prompt",
@@ -242,6 +301,16 @@ def create_appointment_route():
         logger.warning("validation_error endpoint=/create-appointment assistant_id=missing error=assistant_id requerido")
         return assistant_id_error_response()
 
+    wrong_tool_response = wrong_create_tool_response(payload)
+    if wrong_tool_response:
+        logger.warning(
+            "wrong_tool_block endpoint=/create-appointment assistant_id=%s expected_tool=%s context=%s",
+            assistant_id,
+            wrong_tool_response["expected_tool"],
+            request_context_text(payload),
+        )
+        return jsonify(wrong_tool_response), 200
+
     missing_error = require_fields(payload, ["nombre", "telefono", "fecha", "hora"])
     if missing_error:
         logger.warning(
@@ -305,6 +374,154 @@ def create_appointment_route():
             "calendar_link": event.get("htmlLink", ""),
         }
     )
+
+
+@appointments_bp.route("/update-appointment", methods=["POST", "OPTIONS"])
+def update_appointment_route():
+    if request.method == "OPTIONS":
+        return cors_preflight_response()
+
+    payload, error = get_json_payload()
+    if error:
+        logger.warning("validation_error endpoint=/update-appointment error=%s", error)
+        return error_response(error, 415 if "Content-Type" in error else 400)
+
+    assistant_id = extract_assistant_id(payload)
+    logger.info(
+        "request endpoint=/update-appointment assistant_id=%s event_id=%s fecha_actual=%s hora_actual=%s fecha=%s hora=%s",
+        assistant_id or "missing",
+        payload.get("event_id") or payload.get("google_event_id"),
+        payload.get("fecha_actual"),
+        payload.get("hora_actual"),
+        payload.get("fecha"),
+        payload.get("hora"),
+    )
+    if not assistant_id:
+        logger.warning("validation_error endpoint=/update-appointment assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+
+    missing_error = require_fields(payload, ["telefono", "fecha", "hora"])
+    if missing_error:
+        logger.warning("validation_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, missing_error)
+        return error_response(missing_error, 400)
+
+    _, date_error = validate_requested_date(payload, "/update-appointment", assistant_id)
+    if date_error:
+        return date_error
+
+    try:
+        with session_scope() as session:
+            cliente = get_client_for_payload(session, payload)
+            result = update_appointment(session, cliente, payload)
+            cita = result["cita"]
+            event = result.get("event") or {}
+            logger.info(
+                "appointment_updated endpoint=/update-appointment assistant_id=%s cliente_id=%s cita_id=%s event_id=%s fecha=%s hora=%s",
+                assistant_id,
+                cliente.id,
+                cita.id,
+                cita.google_event_id,
+                payload["fecha"],
+                payload["hora"],
+            )
+    except MissingAssistantIdError:
+        logger.warning("validation_error endpoint=/update-appointment assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+    except ClientLookupError as exc:
+        logger.warning("client_lookup_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 404, calendar_link="")
+    except AppointmentClarificationError as exc:
+        logger.info("appointment_clarification endpoint=/update-appointment assistant_id=%s count=%s", assistant_id, len(exc.appointments))
+        return error_response(str(exc), exc.status_code, needs_clarification=True, appointments=exc.appointments)
+    except AvailabilityError as exc:
+        logger.info("appointment_update_rejected endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), exc.status_code, calendar_link="")
+    except ServiceNotFoundError as exc:
+        logger.warning("validation_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), exc.status_code, calendar_link="")
+    except ValueError as exc:
+        logger.warning("validation_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 400, calendar_link="")
+    except CalendarServiceError as exc:
+        logger.exception("google_calendar_error endpoint=/update-appointment assistant_id=%s", assistant_id)
+        return error_response(f"No pude actualizar la cita en Google Calendar: {exc}", 502, calendar_link="")
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Listo, tu cita fue reagendada para {payload['fecha']} a las {payload['hora']}.",
+            "calendar_link": event.get("htmlLink", ""),
+        }
+    )
+
+
+@appointments_bp.route("/cancel-appointment", methods=["POST", "OPTIONS"])
+def cancel_appointment_route():
+    if request.method == "OPTIONS":
+        return cors_preflight_response()
+
+    payload, error = get_json_payload()
+    if error:
+        logger.warning("validation_error endpoint=/cancel-appointment error=%s", error)
+        return error_response(error, 415 if "Content-Type" in error else 400)
+
+    assistant_id = extract_assistant_id(payload)
+    logger.info(
+        "request endpoint=/cancel-appointment assistant_id=%s event_id=%s fecha=%s hora=%s",
+        assistant_id or "missing",
+        payload.get("event_id") or payload.get("google_event_id"),
+        payload.get("fecha"),
+        payload.get("hora"),
+    )
+    if not assistant_id:
+        logger.warning("validation_error endpoint=/cancel-appointment assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+
+    missing_error = require_fields(payload, ["telefono"])
+    if missing_error:
+        logger.warning("validation_error endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, missing_error)
+        return error_response(missing_error, 400)
+
+    if bool(payload.get("fecha")) != bool(payload.get("hora")):
+        return error_response("Para cancelar por horario necesito fecha y hora.", 400)
+
+    if payload.get("fecha"):
+        _, date_error = validate_requested_date(payload, "/cancel-appointment", assistant_id)
+        if date_error:
+            return date_error
+
+    try:
+        with session_scope() as session:
+            cliente = get_client_for_payload(session, payload)
+            result = cancel_appointment(session, cliente, payload)
+            cita = result["cita"]
+            logger.info(
+                "appointment_cancelled endpoint=/cancel-appointment assistant_id=%s cliente_id=%s cita_id=%s event_id=%s",
+                assistant_id,
+                cliente.id,
+                cita.id,
+                cita.google_event_id,
+            )
+    except MissingAssistantIdError:
+        logger.warning("validation_error endpoint=/cancel-appointment assistant_id=missing error=assistant_id requerido")
+        return assistant_id_error_response()
+    except ClientLookupError as exc:
+        logger.warning("client_lookup_error endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 404)
+    except AppointmentClarificationError as exc:
+        logger.info("appointment_clarification endpoint=/cancel-appointment assistant_id=%s count=%s", assistant_id, len(exc.appointments))
+        return error_response(str(exc), exc.status_code, needs_clarification=True, appointments=exc.appointments)
+    except AvailabilityError as exc:
+        logger.info("appointment_cancel_rejected endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), exc.status_code)
+    except ValueError as exc:
+        logger.warning("validation_error endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 400)
+    except CalendarServiceError as exc:
+        logger.exception("google_calendar_error endpoint=/cancel-appointment assistant_id=%s", assistant_id)
+        return error_response(f"No pude cancelar la cita en Google Calendar: {exc}", 502)
+
+    return jsonify({"success": True, "message": "Listo, tu cita fue cancelada."})
 
 
 @appointments_bp.route("/resolve-date", methods=["POST", "OPTIONS"])

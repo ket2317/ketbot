@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,6 +23,14 @@ class AvailabilityError(AppointmentError):
 
 class ServiceNotFoundError(AppointmentError):
     status_code = 400
+
+
+class AppointmentClarificationError(AppointmentError):
+    status_code = 200
+
+    def __init__(self, message: str, appointments: list[dict[str, Any]]):
+        super().__init__(message)
+        self.appointments = appointments
 
 
 def require_fields(payload: dict[str, Any], fields: list[str]) -> str | None:
@@ -171,7 +180,7 @@ def create_appointment(session: Session, cliente: Cliente, payload: dict[str, An
 
 
 def update_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
-    cita = _find_appointment(session, cliente, payload)
+    cita = _find_appointment(session, cliente, payload, use_payload_datetime=False)
     servicio = get_service_for_payload(session, cliente, payload)
     start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
     end = appointment_end(start, servicio or cita.servicio)
@@ -206,7 +215,7 @@ def update_appointment(session: Session, cliente: Cliente, payload: dict[str, An
 
 
 def cancel_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
-    cita = _find_appointment(session, cliente, payload)
+    cita = _find_appointment(session, cliente, payload, use_payload_datetime=True)
     if cita.google_event_id:
         calendar = CalendarService(
             timezone=ZoneInfo(cliente.timezone),
@@ -220,7 +229,40 @@ def cancel_appointment(session: Session, cliente: Cliente, payload: dict[str, An
     return {"cita": cita}
 
 
-def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> Cita:
+def serialize_appointment(cita: Cita) -> dict[str, Any]:
+    return {
+        "cita_id": cita.id,
+        "event_id": cita.google_event_id,
+        "fecha": cita.fecha.isoformat(),
+        "hora": cita.hora.strftime("%H:%M"),
+        "nombre": cita.nombre_cliente,
+        "telefono": cita.telefono,
+        "motivo": cita.servicio.nombre if cita.servicio else "Cita",
+    }
+
+
+def normalize_phone(value: str | None) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) > 10 and digits.startswith("521"):
+        digits = digits[3:]
+    elif len(digits) > 10 and digits.startswith("52"):
+        digits = digits[2:]
+    if len(digits) > 10:
+        digits = digits[-10:]
+    return digits
+
+
+def _phones_match(left: str | None, right: str | None) -> bool:
+    left_normalized = normalize_phone(left)
+    right_normalized = normalize_phone(right)
+    return bool(left_normalized and right_normalized and left_normalized == right_normalized)
+
+
+def phones_match(left: str | None, right: str | None) -> bool:
+    return _phones_match(left, right)
+
+
+def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any], use_payload_datetime: bool) -> Cita:
     cita_id = payload.get("cita_id") or payload.get("appointment_id")
     if cita_id:
         try:
@@ -231,7 +273,7 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
         if cita and cita.cliente_id == cliente.id:
             return cita
 
-    google_event_id = payload.get("google_event_id")
+    google_event_id = payload.get("event_id") or payload.get("google_event_id")
     if google_event_id:
         cita = session.scalar(
             select(Cita).where(
@@ -244,20 +286,67 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
             return cita
 
     telefono = str(payload.get("telefono", "")).strip()
-    if not telefono:
+    telefono_normalizado = normalize_phone(telefono)
+    if not telefono_normalizado:
         raise AvailabilityError("Necesito teléfono, cita_id o google_event_id para encontrar la cita.")
 
-    query = select(Cita).where(Cita.cliente_id == cliente.id, Cita.estado.in_(("agendada", "pendiente")))
-    if telefono:
-        query = query.where(Cita.telefono == telefono)
+    lookup_fecha = payload.get("fecha_actual") or (payload.get("fecha") if use_payload_datetime else None)
+    lookup_hora = payload.get("hora_actual") or (payload.get("hora") if use_payload_datetime else None)
+    lookup_start = None
+    if lookup_fecha and lookup_hora:
+        lookup_start = parse_start(str(lookup_fecha), str(lookup_hora), cliente.timezone)
 
-    if payload.get("fecha") and payload.get("hora"):
-        start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
-        query = query.where(Cita.fecha == start.date(), Cita.hora == start.time().replace(tzinfo=None))
+    query = (
+        select(Cita)
+        .where(Cita.cliente_id == cliente.id, Cita.estado.in_(("agendada", "pendiente")))
+        .order_by(Cita.fecha.asc(), Cita.hora.asc())
+    )
+    if lookup_start:
+        query = query.where(Cita.fecha == lookup_start.date(), Cita.hora == lookup_start.time().replace(tzinfo=None))
     else:
-        query = query.where(Cita.fecha >= date.today()).order_by(Cita.fecha.asc(), Cita.hora.asc())
+        query = query.where(Cita.fecha >= date.today())
 
-    cita = session.scalar(query)
-    if not cita:
+    candidates = [
+        cita
+        for cita in session.scalars(query).unique().all()
+        if _phones_match(telefono, cita.telefono)
+    ]
+
+    nombre = str(payload.get("nombre", "")).strip().lower()
+    if nombre:
+        candidates = [
+            cita for cita in candidates
+            if nombre in cita.nombre_cliente.lower() or cita.nombre_cliente.lower() in nombre
+        ]
+
+    if not candidates and lookup_start:
+        fallback_query = (
+            select(Cita)
+            .where(
+                Cita.cliente_id == cliente.id,
+                Cita.estado.in_(("agendada", "pendiente")),
+                Cita.fecha >= date.today(),
+            )
+            .order_by(Cita.fecha.asc(), Cita.hora.asc())
+        )
+        fallback = [
+            cita
+            for cita in session.scalars(fallback_query).unique().all()
+            if _phones_match(telefono, cita.telefono)
+        ]
+        if fallback:
+            raise AppointmentClarificationError(
+                "No encontré una cita con esa fecha y hora. Estas son las citas futuras que encontré.",
+                [serialize_appointment(cita) for cita in fallback],
+            )
+
+    if not candidates:
         raise AvailabilityError("No encontré una cita activa para actualizar o cancelar.")
-    return cita
+
+    if len(candidates) > 1:
+        raise AppointmentClarificationError(
+            "Encontré varias citas futuras. Necesito saber cuál quieres modificar o cancelar.",
+            [serialize_appointment(cita) for cita in candidates],
+        )
+
+    return candidates[0]

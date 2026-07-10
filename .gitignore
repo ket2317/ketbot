@@ -1,9 +1,11 @@
 .env
+.DS_Store
 .venv/
 __pycache__/
 *.pyc
 app.db
 tokens/
 *.token.json
+credentials.json
 credentials/*.json
 !credentials/.gitkeep
