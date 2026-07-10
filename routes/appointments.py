@@ -11,7 +11,7 @@ from clients import (
     get_client_for_payload,
     normalize_vapi_payload,
 )
-from date_resolver import DATE_FORMAT_RE, client_today, resolve_date_text
+from date_resolver import DATE_FORMAT_RE, client_today, resolve_date_context, resolve_date_text
 from database import session_scope
 from prompt_service import generate_client_prompt
 from services import (
@@ -22,6 +22,7 @@ from services import (
     create_appointment,
     get_active_services,
     get_service_for_payload,
+    normalize_phone,
     parse_start,
     appointment_end,
     require_fields,
@@ -73,7 +74,12 @@ def get_query_payload() -> dict:
     return normalize_vapi_payload(dict(request.args))
 
 
-def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> tuple[date | None, tuple | None]:
+def validate_requested_date(
+    payload: dict,
+    endpoint: str,
+    assistant_id: str,
+    today: date | None = None,
+) -> tuple[date | None, tuple | None]:
     raw_fecha = str(payload.get("fecha", "")).strip()
     if not DATE_FORMAT_RE.fullmatch(raw_fecha):
         logger.warning(
@@ -95,18 +101,89 @@ def validate_requested_date(payload: dict, endpoint: str, assistant_id: str) -> 
         )
         return None, error_response(INVALID_DATE_FORMAT_MESSAGE, 400)
 
-    today = date.today()
-    if requested_date < today:
+    current_date = today or date.today()
+    if requested_date < current_date:
         logger.warning(
             "past_date_rejected endpoint=%s assistant_id=%s fecha=%s today=%s",
             endpoint,
             assistant_id,
             requested_date.isoformat(),
-            today.isoformat(),
+            current_date.isoformat(),
         )
         return None, error_response(PAST_DATE_MESSAGE, 400)
 
     return requested_date, None
+
+
+def date_resolution_response(resolution, status_code: int = 400):
+    return jsonify(
+        {
+            "success": False,
+            "date": resolution.date.isoformat() if resolution.date else None,
+            "display_date": resolution.display_date,
+            "needs_clarification": resolution.needs_clarification,
+            "resolved_month": resolution.resolved_month,
+            "resolved_year": resolution.resolved_year,
+            "timezone": resolution.timezone,
+            "interpreted_from": resolution.interpreted_from,
+            "resolution_rule": resolution.resolution_rule,
+            "message": resolution.message or UNRESOLVED_DATE_MESSAGE,
+        }
+    ), status_code
+
+
+def first_text(payload: dict, fields: tuple[str, ...]) -> str:
+    for field in fields:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def apply_date_text(
+    payload: dict,
+    cliente,
+    endpoint: str,
+    assistant_id: str,
+    target_field: str,
+    text_fields: tuple[str, ...],
+    allow_month_lookup: bool = False,
+) -> tuple | None:
+    if payload.get(target_field):
+        return None
+
+    date_text = first_text(payload, text_fields)
+    if not date_text:
+        return None
+
+    today = client_today(cliente.timezone)
+    resolution = resolve_date_context(date_text, today, cliente.timezone)
+    logger.info(
+        "date_text_resolution endpoint=%s assistant_id=%s timezone=%s current_local_date=%s date_text=%s "
+        "resolved_date=%s resolved_month=%s resolved_year=%s resolution_rule=%s needs_clarification=%s target_field=%s",
+        endpoint,
+        assistant_id,
+        cliente.timezone,
+        today.isoformat(),
+        date_text,
+        resolution.date.isoformat() if resolution.date else None,
+        resolution.resolved_month,
+        resolution.resolved_year,
+        resolution.resolution_rule,
+        resolution.needs_clarification,
+        target_field,
+    )
+    if resolution.success and resolution.date:
+        payload[target_field] = resolution.date.isoformat()
+        return None
+
+    if allow_month_lookup and resolution.needs_clarification and resolution.resolved_month and resolution.resolved_year:
+        payload["lookup_month"] = resolution.resolved_month
+        payload["lookup_year"] = resolution.resolved_year
+        payload["lookup_date_text"] = date_text
+        return None
+
+    return date_resolution_response(resolution, 200 if resolution.needs_clarification else 400)
 
 
 def wrong_create_tool_response(payload: dict) -> dict | None:
@@ -203,7 +280,7 @@ def check_availability():
         logger.warning("validation_error endpoint=/check-availability assistant_id=missing error=assistant_id requerido")
         return assistant_id_error_response()
 
-    missing_error = require_fields(payload, ["fecha", "hora"])
+    missing_error = require_fields(payload, ["hora"])
     if missing_error:
         logger.warning(
             "validation_error endpoint=/check-availability assistant_id=%s error=%s",
@@ -212,13 +289,30 @@ def check_availability():
         )
         return error_response(missing_error, 400)
 
-    _, date_error = validate_requested_date(payload, "/check-availability", assistant_id)
-    if date_error:
-        return date_error
-
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
+            date_text_error = apply_date_text(
+                payload,
+                cliente,
+                "/check-availability",
+                assistant_id,
+                "fecha",
+                ("fecha_text", "date_text", "dateText"),
+            )
+            if date_text_error:
+                return date_text_error
+            missing_error = require_fields(payload, ["fecha", "hora"])
+            if missing_error:
+                logger.warning(
+                    "validation_error endpoint=/check-availability assistant_id=%s error=%s",
+                    assistant_id,
+                    missing_error,
+                )
+                return error_response(missing_error, 400)
+            _, date_error = validate_requested_date(payload, "/check-availability", assistant_id, client_today(cliente.timezone))
+            if date_error:
+                return date_error
             logger.info(
                 "client_identified endpoint=/check-availability assistant_id=%s cliente_id=%s cliente=%s",
                 assistant_id,
@@ -311,7 +405,7 @@ def create_appointment_route():
         )
         return jsonify(wrong_tool_response), 200
 
-    missing_error = require_fields(payload, ["nombre", "telefono", "fecha", "hora"])
+    missing_error = require_fields(payload, ["nombre", "telefono", "hora"])
     if missing_error:
         logger.warning(
             "validation_error endpoint=/create-appointment assistant_id=%s error=%s",
@@ -320,13 +414,30 @@ def create_appointment_route():
         )
         return error_response(missing_error, 400)
 
-    _, date_error = validate_requested_date(payload, "/create-appointment", assistant_id)
-    if date_error:
-        return date_error
-
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
+            date_text_error = apply_date_text(
+                payload,
+                cliente,
+                "/create-appointment",
+                assistant_id,
+                "fecha",
+                ("fecha_text", "date_text", "dateText"),
+            )
+            if date_text_error:
+                return date_text_error
+            missing_error = require_fields(payload, ["nombre", "telefono", "fecha", "hora"])
+            if missing_error:
+                logger.warning(
+                    "validation_error endpoint=/create-appointment assistant_id=%s error=%s",
+                    assistant_id,
+                    missing_error,
+                )
+                return error_response(missing_error, 400)
+            _, date_error = validate_requested_date(payload, "/create-appointment", assistant_id, client_today(cliente.timezone))
+            if date_error:
+                return date_error
             logger.info(
                 "client_identified endpoint=/create-appointment assistant_id=%s cliente_id=%s cliente=%s",
                 assistant_id,
@@ -400,18 +511,55 @@ def update_appointment_route():
         logger.warning("validation_error endpoint=/update-appointment assistant_id=missing error=assistant_id requerido")
         return assistant_id_error_response()
 
-    missing_error = require_fields(payload, ["telefono", "fecha", "hora"])
+    missing_error = require_fields(payload, ["telefono", "hora"])
     if missing_error:
         logger.warning("validation_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, missing_error)
         return error_response(missing_error, 400)
 
-    _, date_error = validate_requested_date(payload, "/update-appointment", assistant_id)
-    if date_error:
-        return date_error
-
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
+            new_date_error = apply_date_text(
+                payload,
+                cliente,
+                "/update-appointment",
+                assistant_id,
+                "fecha",
+                ("fecha_nueva_text", "nueva_fecha_text", "new_date_text"),
+            )
+            if new_date_error:
+                return new_date_error
+            lookup_date_error = apply_date_text(
+                payload,
+                cliente,
+                "/update-appointment",
+                assistant_id,
+                "fecha_actual",
+                ("fecha_actual_text", "date_text_actual", "original_date_text"),
+                allow_month_lookup=True,
+            )
+            if lookup_date_error:
+                return lookup_date_error
+            missing_error = require_fields(payload, ["telefono", "fecha", "hora"])
+            if missing_error:
+                logger.warning("validation_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, missing_error)
+                return error_response(missing_error, 400)
+            _, date_error = validate_requested_date(payload, "/update-appointment", assistant_id, client_today(cliente.timezone))
+            if date_error:
+                return date_error
+            logger.info(
+                "appointment_lookup endpoint=/update-appointment assistant_id=%s telefono_normalizado=%s event_id=%s "
+                "fecha_actual=%s hora_actual=%s fecha=%s hora=%s lookup_month=%s lookup_year=%s",
+                assistant_id,
+                normalize_phone(payload.get("telefono")),
+                payload.get("event_id") or payload.get("google_event_id"),
+                payload.get("fecha_actual"),
+                payload.get("hora_actual"),
+                payload.get("fecha"),
+                payload.get("hora"),
+                payload.get("lookup_month"),
+                payload.get("lookup_year"),
+            )
             result = update_appointment(session, cliente, payload)
             cita = result["cita"]
             event = result.get("event") or {}
@@ -431,7 +579,18 @@ def update_appointment_route():
         logger.warning("client_lookup_error endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
         return error_response(str(exc), 404, calendar_link="")
     except AppointmentClarificationError as exc:
-        logger.info("appointment_clarification endpoint=/update-appointment assistant_id=%s count=%s", assistant_id, len(exc.appointments))
+        logger.info(
+            "appointment_clarification endpoint=/update-appointment assistant_id=%s telefono_normalizado=%s event_id=%s "
+            "fecha_actual=%s hora_actual=%s fecha=%s hora=%s count=%s",
+            assistant_id,
+            normalize_phone(payload.get("telefono")),
+            payload.get("event_id") or payload.get("google_event_id"),
+            payload.get("fecha_actual"),
+            payload.get("hora_actual"),
+            payload.get("fecha"),
+            payload.get("hora"),
+            len(exc.appointments),
+        )
         return error_response(str(exc), exc.status_code, needs_clarification=True, appointments=exc.appointments)
     except AvailabilityError as exc:
         logger.info("appointment_update_rejected endpoint=/update-appointment assistant_id=%s error=%s", assistant_id, exc)
@@ -482,17 +641,35 @@ def cancel_appointment_route():
         logger.warning("validation_error endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, missing_error)
         return error_response(missing_error, 400)
 
-    if bool(payload.get("fecha")) != bool(payload.get("hora")):
-        return error_response("Para cancelar por horario necesito fecha y hora.", 400)
-
-    if payload.get("fecha"):
-        _, date_error = validate_requested_date(payload, "/cancel-appointment", assistant_id)
-        if date_error:
-            return date_error
-
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
+            lookup_date_error = apply_date_text(
+                payload,
+                cliente,
+                "/cancel-appointment",
+                assistant_id,
+                "fecha",
+                ("fecha_text", "date_text", "dateText", "fecha_actual_text"),
+                allow_month_lookup=True,
+            )
+            if lookup_date_error:
+                return lookup_date_error
+            if payload.get("fecha"):
+                _, date_error = validate_requested_date(payload, "/cancel-appointment", assistant_id, client_today(cliente.timezone))
+                if date_error:
+                    return date_error
+            logger.info(
+                "appointment_lookup endpoint=/cancel-appointment assistant_id=%s telefono_normalizado=%s event_id=%s "
+                "fecha=%s hora=%s lookup_month=%s lookup_year=%s",
+                assistant_id,
+                normalize_phone(payload.get("telefono")),
+                payload.get("event_id") or payload.get("google_event_id"),
+                payload.get("fecha"),
+                payload.get("hora"),
+                payload.get("lookup_month"),
+                payload.get("lookup_year"),
+            )
             result = cancel_appointment(session, cliente, payload)
             cita = result["cita"]
             logger.info(
@@ -509,7 +686,16 @@ def cancel_appointment_route():
         logger.warning("client_lookup_error endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, exc)
         return error_response(str(exc), 404)
     except AppointmentClarificationError as exc:
-        logger.info("appointment_clarification endpoint=/cancel-appointment assistant_id=%s count=%s", assistant_id, len(exc.appointments))
+        logger.info(
+            "appointment_clarification endpoint=/cancel-appointment assistant_id=%s telefono_normalizado=%s event_id=%s "
+            "fecha=%s hora=%s count=%s",
+            assistant_id,
+            normalize_phone(payload.get("telefono")),
+            payload.get("event_id") or payload.get("google_event_id"),
+            payload.get("fecha"),
+            payload.get("hora"),
+            len(exc.appointments),
+        )
         return error_response(str(exc), exc.status_code, needs_clarification=True, appointments=exc.appointments)
     except AvailabilityError as exc:
         logger.info("appointment_cancel_rejected endpoint=/cancel-appointment assistant_id=%s error=%s", assistant_id, exc)
@@ -554,27 +740,24 @@ def resolve_date_route():
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
             today = client_today(cliente.timezone)
-            resolved_date = resolve_date_text(date_text, today)
-            if resolved_date is None:
-                logger.warning(
-                    "resolve_date_failed endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s today=%s timezone=%s",
-                    assistant_id,
-                    cliente.id,
-                    date_text,
-                    today.isoformat(),
-                    cliente.timezone,
-                )
-                return resolve_date_error_response()
+            resolution = resolve_date_context(date_text, today, cliente.timezone)
 
             logger.info(
-                "resolve_date_success endpoint=/resolve-date assistant_id=%s cliente_id=%s date_text=%s resolved_date=%s today=%s timezone=%s",
+                "resolve_date_result endpoint=/resolve-date assistant_id=%s cliente_id=%s timezone=%s current_local_date=%s "
+                "date_text=%s resolved_date=%s resolved_month=%s resolved_year=%s resolution_rule=%s needs_clarification=%s",
                 assistant_id,
                 cliente.id,
-                date_text,
-                resolved_date.isoformat(),
-                today.isoformat(),
                 cliente.timezone,
+                today.isoformat(),
+                date_text,
+                resolution.date.isoformat() if resolution.date else None,
+                resolution.resolved_month,
+                resolution.resolved_year,
+                resolution.resolution_rule,
+                resolution.needs_clarification,
             )
+            if not resolution.success:
+                return date_resolution_response(resolution, 200 if resolution.needs_clarification else 400)
     except MissingAssistantIdError:
         logger.warning("validation_error endpoint=/resolve-date assistant_id=missing error=assistant_id requerido")
         return assistant_id_error_response()
@@ -585,8 +768,14 @@ def resolve_date_route():
     return jsonify(
         {
             "success": True,
-            "date": resolved_date.isoformat(),
-            "message": "Fecha resuelta correctamente.",
+            "date": resolution.date.isoformat(),
+            "display_date": resolution.display_date,
+            "timezone": resolution.timezone,
+            "interpreted_from": resolution.interpreted_from,
+            "resolved_month": resolution.resolved_month,
+            "resolved_year": resolution.resolved_year,
+            "resolution_rule": resolution.resolution_rule,
+            "message": resolution.message,
         }
     )
 

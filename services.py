@@ -1,4 +1,5 @@
 import re
+import calendar
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -293,24 +294,57 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
     lookup_fecha = payload.get("fecha_actual") or (payload.get("fecha") if use_payload_datetime else None)
     lookup_hora = payload.get("hora_actual") or (payload.get("hora") if use_payload_datetime else None)
     lookup_start = None
+    lookup_date = None
+    lookup_time = None
     if lookup_fecha and lookup_hora:
         lookup_start = parse_start(str(lookup_fecha), str(lookup_hora), cliente.timezone)
+        lookup_date = lookup_start.date()
+        lookup_time = lookup_start.time().replace(tzinfo=None)
+    elif lookup_fecha:
+        try:
+            lookup_date = date.fromisoformat(str(lookup_fecha))
+        except ValueError as exc:
+            raise ValueError("Formato inválido. Usa fecha YYYY-MM-DD.") from exc
+
+    lookup_month = payload.get("lookup_month")
+    lookup_year = payload.get("lookup_year")
+    if lookup_month and lookup_year:
+        try:
+            lookup_month = int(lookup_month)
+            lookup_year = int(lookup_year)
+            month_last_day = calendar.monthrange(lookup_year, lookup_month)[1]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("lookup_month y lookup_year deben ser valores válidos.") from exc
+    else:
+        lookup_month = None
+        lookup_year = None
+        month_last_day = None
+
+    current_date = _client_today(cliente.timezone)
 
     query = (
         select(Cita)
         .where(Cita.cliente_id == cliente.id, Cita.estado.in_(("agendada", "pendiente")))
         .order_by(Cita.fecha.asc(), Cita.hora.asc())
     )
-    if lookup_start:
-        query = query.where(Cita.fecha == lookup_start.date(), Cita.hora == lookup_start.time().replace(tzinfo=None))
+    if lookup_date:
+        query = query.where(Cita.fecha == lookup_date)
+        if lookup_time:
+            query = query.where(Cita.hora == lookup_time)
+    elif lookup_month and lookup_year:
+        query = query.where(
+            Cita.fecha >= date(lookup_year, lookup_month, 1),
+            Cita.fecha <= date(lookup_year, lookup_month, month_last_day),
+        )
     else:
-        query = query.where(Cita.fecha >= date.today())
+        query = query.where(Cita.fecha >= current_date)
 
     candidates = [
         cita
         for cita in session.scalars(query).unique().all()
         if _phones_match(telefono, cita.telefono)
     ]
+    candidates = _filter_candidates_by_date(candidates, lookup_date, lookup_time, lookup_month, lookup_year)
 
     nombre = str(payload.get("nombre", "")).strip().lower()
     if nombre:
@@ -319,13 +353,13 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
             if nombre in cita.nombre_cliente.lower() or cita.nombre_cliente.lower() in nombre
         ]
 
-    if not candidates and lookup_start:
+    if not candidates and (lookup_date or lookup_month):
         fallback_query = (
             select(Cita)
             .where(
                 Cita.cliente_id == cliente.id,
                 Cita.estado.in_(("agendada", "pendiente")),
-                Cita.fecha >= date.today(),
+                Cita.fecha >= current_date,
             )
             .order_by(Cita.fecha.asc(), Cita.hora.asc())
         )
@@ -335,8 +369,12 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
             if _phones_match(telefono, cita.telefono)
         ]
         if fallback:
+            if lookup_month and lookup_year:
+                message = "No encontré una cita en ese mes. Estas son las citas futuras que encontré."
+            else:
+                message = "No encontré una cita con esa fecha u hora. Estas son las citas futuras que encontré."
             raise AppointmentClarificationError(
-                "No encontré una cita con esa fecha y hora. Estas son las citas futuras que encontré.",
+                message,
                 [serialize_appointment(cita) for cita in fallback],
             )
 
@@ -350,3 +388,30 @@ def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any
         )
 
     return candidates[0]
+
+
+def _client_today(timezone: str) -> date:
+    try:
+        return datetime.now(ZoneInfo(timezone)).date()
+    except ZoneInfoNotFoundError:
+        return date.today()
+
+
+def _filter_candidates_by_date(
+    candidates: list[Cita],
+    lookup_date: date | None,
+    lookup_time,
+    lookup_month: int | None,
+    lookup_year: int | None,
+) -> list[Cita]:
+    filtered = candidates
+    if lookup_date:
+        filtered = [cita for cita in filtered if cita.fecha == lookup_date]
+        if lookup_time:
+            filtered = [cita for cita in filtered if cita.hora == lookup_time]
+    elif lookup_month and lookup_year:
+        filtered = [
+            cita for cita in filtered
+            if cita.fecha.month == lookup_month and cita.fecha.year == lookup_year
+        ]
+    return filtered
