@@ -32,7 +32,7 @@ class CalendarService:
         self.token_file = TOKEN_DIR / f"{_safe_token_name(self.credentials_file)}.json"
         self._service = None
 
-    def is_available(self, start, end) -> bool:
+    def is_available(self, start, end, exclude_event_id: str | None = None) -> bool:
         try:
             events_result = (
                 self.service.events()
@@ -48,7 +48,10 @@ class CalendarService:
         except HttpError as exc:
             raise CalendarServiceError("Google Calendar rechazó la consulta de disponibilidad.") from exc
 
-        return len(events_result.get("items", [])) == 0
+        events = events_result.get("items", [])
+        if exclude_event_id:
+            events = [event for event in events if event.get("id") != exclude_event_id]
+        return len(events) == 0
 
     def create_calendar_event(self, nombre: str, telefono: str, motivo: str, start, end) -> dict:
         event = {
@@ -66,6 +69,31 @@ class CalendarService:
             )
         except HttpError as exc:
             raise CalendarServiceError("Google Calendar rechazó la creación del evento.") from exc
+
+    def update_calendar_event(self, event_id: str, nombre: str, telefono: str, motivo: str, start, end) -> dict:
+        event = {
+            "summary": f"Cita: {motivo}",
+            "description": f"Nombre: {nombre}\nTelefono: {telefono}\nMotivo: {motivo}",
+            "start": {"dateTime": start.isoformat(), "timeZone": str(self.timezone)},
+            "end": {"dateTime": end.isoformat(), "timeZone": str(self.timezone)},
+        }
+
+        try:
+            return (
+                self.service.events()
+                .update(calendarId=self.calendar_id, eventId=event_id, body=event)
+                .execute()
+            )
+        except HttpError as exc:
+            raise CalendarServiceError("Google Calendar rechazó la actualización del evento.") from exc
+
+    def delete_calendar_event(self, event_id: str) -> None:
+        try:
+            self.service.events().delete(calendarId=self.calendar_id, eventId=event_id).execute()
+        except HttpError as exc:
+            if getattr(exc.resp, "status", None) in (404, 410):
+                return
+            raise CalendarServiceError("Google Calendar rechazó la cancelación del evento.") from exc
 
     @property
     def service(self):

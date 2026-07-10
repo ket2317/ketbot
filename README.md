@@ -120,6 +120,8 @@ WHATSAPP_VERIFY_TOKEN=
 WHATSAPP_TOKEN=
 WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_API_VERSION=v20.0
+WHATSAPP_DEFAULT_ASSISTANT_ID=rpm-automotive
+WHATSAPP_PHONE_ASSISTANT_MAP={"PHONE_NUMBER_ID_1":"rpm-automotive","PHONE_NUMBER_ID_2":"unas-la-comer"}
 ```
 
 No pongas tokens reales en el README. Define esos valores en `.env` local o en Render.
@@ -131,6 +133,8 @@ GET/POST https://TU-DOMINIO/whatsapp
 ```
 
 El backend usa `WHATSAPP_VERIFY_TOKEN` para verificar el webhook y responde mensajes entrantes con `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
+`WHATSAPP_DEFAULT_ASSISTANT_ID` define qué cliente de Ket atiende los mensajes de WhatsApp cuando el webhook no trae un identificador de asistente.
+`WHATSAPP_PHONE_ASSISTANT_MAP` permite relacionar cada `metadata.phone_number_id` de WhatsApp Cloud API con el `assistant_id` del cliente correspondiente. Si un `phone_number_id` no existe en el mapa, se usa `WHATSAPP_DEFAULT_ASSISTANT_ID`.
 
 ## Endpoints
 

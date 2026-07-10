@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -8,6 +10,7 @@ load_dotenv()
 
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 def _database_url() -> str:
@@ -17,6 +20,28 @@ def _database_url() -> str:
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+psycopg://", 1)
     return url
+
+
+def _whatsapp_phone_assistant_map() -> dict[str, str]:
+    raw_map = os.getenv("WHATSAPP_PHONE_ASSISTANT_MAP", "").strip()
+    if not raw_map:
+        return {}
+
+    try:
+        parsed_map = json.loads(raw_map)
+    except json.JSONDecodeError:
+        logger.warning("invalid_whatsapp_phone_assistant_map reason=json_decode_error")
+        return {}
+
+    if not isinstance(parsed_map, dict):
+        logger.warning("invalid_whatsapp_phone_assistant_map reason=not_object")
+        return {}
+
+    return {
+        str(phone_number_id).strip(): str(assistant_id).strip()
+        for phone_number_id, assistant_id in parsed_map.items()
+        if str(phone_number_id).strip() and str(assistant_id).strip()
+    }
 
 
 class Config:
@@ -50,3 +75,5 @@ class Config:
     WHATSAPP_TOKEN: str = os.getenv("WHATSAPP_TOKEN", "")
     WHATSAPP_PHONE_NUMBER_ID: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v20.0")
+    WHATSAPP_DEFAULT_ASSISTANT_ID: str = os.getenv("WHATSAPP_DEFAULT_ASSISTANT_ID", RPM_ASSISTANT_ID)
+    WHATSAPP_PHONE_ASSISTANT_MAP: dict[str, str] = _whatsapp_phone_assistant_map()

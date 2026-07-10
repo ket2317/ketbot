@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
@@ -114,7 +114,7 @@ def ensure_inside_business_hours(cliente: Cliente, start: datetime, end: datetim
         )
 
 
-def check_client_availability(cliente: Cliente, start: datetime, end: datetime) -> bool:
+def check_client_availability(cliente: Cliente, start: datetime, end: datetime, exclude_event_id: str | None = None) -> bool:
     ensure_inside_business_hours(cliente, start, end)
     calendar = CalendarService(
         timezone=ZoneInfo(cliente.timezone),
@@ -122,7 +122,7 @@ def check_client_availability(cliente: Cliente, start: datetime, end: datetime) 
         credentials_file=cliente.credentials_file,
         credentials_env_var=cliente.credentials_env_var,
     )
-    return calendar.is_available(start, end)
+    return calendar.is_available(start, end, exclude_event_id=exclude_event_id)
 
 
 def create_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
@@ -168,3 +168,96 @@ def create_appointment(session: Session, cliente: Cliente, payload: dict[str, An
     cita.estado = "agendada"
 
     return {"event": event, "cita": cita}
+
+
+def update_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
+    cita = _find_appointment(session, cliente, payload)
+    servicio = get_service_for_payload(session, cliente, payload)
+    start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
+    end = appointment_end(start, servicio or cita.servicio)
+
+    if not check_client_availability(cliente, start, end, exclude_event_id=cita.google_event_id):
+        raise AvailabilityError(f"Ese horario ya no está disponible: {payload['fecha']} {payload['hora']}.")
+
+    motivo = payload.get("motivo") or payload.get("servicio") or (servicio.nombre if servicio else "Cita")
+    event = {}
+    if cita.google_event_id:
+        calendar = CalendarService(
+            timezone=ZoneInfo(cliente.timezone),
+            calendar_id=cliente.calendar_id,
+            credentials_file=cliente.credentials_file,
+            credentials_env_var=cliente.credentials_env_var,
+        )
+        event = calendar.update_calendar_event(
+            event_id=cita.google_event_id,
+            nombre=cita.nombre_cliente,
+            telefono=cita.telefono,
+            motivo=motivo,
+            start=start,
+            end=end,
+        )
+
+    if servicio:
+        cita.servicio_id = servicio.id
+    cita.fecha = start.date()
+    cita.hora = start.time().replace(tzinfo=None)
+    cita.estado = "agendada"
+    return {"event": event, "cita": cita}
+
+
+def cancel_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
+    cita = _find_appointment(session, cliente, payload)
+    if cita.google_event_id:
+        calendar = CalendarService(
+            timezone=ZoneInfo(cliente.timezone),
+            calendar_id=cliente.calendar_id,
+            credentials_file=cliente.credentials_file,
+            credentials_env_var=cliente.credentials_env_var,
+        )
+        calendar.delete_calendar_event(cita.google_event_id)
+
+    cita.estado = "cancelada"
+    return {"cita": cita}
+
+
+def _find_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> Cita:
+    cita_id = payload.get("cita_id") or payload.get("appointment_id")
+    if cita_id:
+        try:
+            parsed_cita_id = int(cita_id)
+        except (TypeError, ValueError) as exc:
+            raise AvailabilityError("cita_id debe ser numérico.") from exc
+        cita = session.get(Cita, parsed_cita_id)
+        if cita and cita.cliente_id == cliente.id:
+            return cita
+
+    google_event_id = payload.get("google_event_id")
+    if google_event_id:
+        cita = session.scalar(
+            select(Cita).where(
+                Cita.cliente_id == cliente.id,
+                Cita.google_event_id == str(google_event_id),
+                Cita.estado != "cancelada",
+            )
+        )
+        if cita:
+            return cita
+
+    telefono = str(payload.get("telefono", "")).strip()
+    if not telefono:
+        raise AvailabilityError("Necesito teléfono, cita_id o google_event_id para encontrar la cita.")
+
+    query = select(Cita).where(Cita.cliente_id == cliente.id, Cita.estado.in_(("agendada", "pendiente")))
+    if telefono:
+        query = query.where(Cita.telefono == telefono)
+
+    if payload.get("fecha") and payload.get("hora"):
+        start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
+        query = query.where(Cita.fecha == start.date(), Cita.hora == start.time().replace(tzinfo=None))
+    else:
+        query = query.where(Cita.fecha >= date.today()).order_by(Cita.fecha.asc(), Cita.hora.asc())
+
+    cita = session.scalar(query)
+    if not cita:
+        raise AvailabilityError("No encontré una cita activa para actualizar o cancelar.")
+    return cita

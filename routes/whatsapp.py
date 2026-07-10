@@ -43,8 +43,21 @@ def receive_whatsapp_message():
     for message in messages:
         telefono = message["telefono"]
         texto = message["mensaje"]
-        logger.info("whatsapp_message_received telefono=%s message_length=%s", _mask_phone(telefono), len(texto))
-        respuesta = procesar_mensaje_cliente(telefono=telefono, mensaje=texto, canal="whatsapp")
+        phone_number_id = message.get("phone_number_id", "")
+        assistant_id = _assistant_id_for_phone_number(phone_number_id)
+        logger.info(
+            "whatsapp_message_received phone_number_id=%s assistant_id=%s telefono=%s message_length=%s",
+            phone_number_id or "missing",
+            assistant_id,
+            _mask_phone(telefono),
+            len(texto),
+        )
+        respuesta = procesar_mensaje_cliente(
+            telefono=telefono,
+            mensaje=texto,
+            canal="whatsapp",
+            assistant_id=assistant_id,
+        )
         send_whatsapp_message(telefono, respuesta)
         processed += 1
 
@@ -56,13 +69,34 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
+            metadata = value.get("metadata", {})
+            phone_number_id = str(metadata.get("phone_number_id", "")).strip() if isinstance(metadata, dict) else ""
             for message in value.get("messages", []):
                 telefono = str(message.get("from", "")).strip()
                 text = message.get("text", {})
                 mensaje = str(text.get("body", "")).strip() if isinstance(text, dict) else ""
                 if telefono and mensaje:
-                    extracted.append({"telefono": telefono, "mensaje": mensaje})
+                    extracted.append(
+                        {
+                            "telefono": telefono,
+                            "mensaje": mensaje,
+                            "phone_number_id": phone_number_id,
+                        }
+                    )
     return extracted
+
+
+def _assistant_id_for_phone_number(phone_number_id: str) -> str:
+    assistant_id = Config.WHATSAPP_PHONE_ASSISTANT_MAP.get(phone_number_id)
+    if assistant_id:
+        return assistant_id
+
+    logger.info(
+        "whatsapp_phone_number_unmapped phone_number_id=%s fallback_assistant_id=%s",
+        phone_number_id or "missing",
+        Config.WHATSAPP_DEFAULT_ASSISTANT_ID,
+    )
+    return Config.WHATSAPP_DEFAULT_ASSISTANT_ID
 
 
 def _mask_phone(telefono: str) -> str:
