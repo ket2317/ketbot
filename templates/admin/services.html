@@ -20,16 +20,12 @@
 </section>
 
 <nav class="ket-client-menu" aria-label="Cliente">
-  <a href="#">Resumen</a>
-  <a href="#">Agenda</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Información del negocio</a>
+  <a href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
   <a class="active" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
-  <a href="#">Horarios</a>
-  <a href="#">Prompt IA</a>
-  <a href="#">Base de conocimiento</a>
-  <a href="#">Actividad</a>
-  <a href="#">Analíticas</a>
-  <a href="#">Integraciones</a>
-  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Configuración</a>
+  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Disponibilidad de servicios</a>
+  <a href="#">Citas</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Estado del asistente</a>
 </nav>
 
 <section class="ket-section">
@@ -57,6 +53,15 @@
       <div class="ket-service-meta">
         <span>Duración</span>
         <strong>{{ servicio.duracion_minutos }} min</strong>
+      </div>
+      <div class="ket-service-meta">
+        <span>Canales</span>
+        <strong>
+          {% if servicio.disponible_por_llamada %}Llamada{% endif %}
+          {% if servicio.disponible_por_llamada and servicio.disponible_por_whatsapp %} · {% endif %}
+          {% if servicio.disponible_por_whatsapp %}WhatsApp{% endif %}
+          {% if not servicio.disponible_por_llamada and not servicio.disponible_por_whatsapp %}Sin canales{% endif %}
+        </strong>
       </div>
       <div class="ket-card-actions">
         <a class="ket-button ket-button-secondary" href="{{ url_for('admin.service_edit', service_id=servicio.id) }}">

@@ -39,10 +39,44 @@ def _add_missing_columns() -> None:
     if not inspector.has_table("clientes"):
         return
 
-    existing_columns = {column["name"] for column in inspector.get_columns("clientes")}
-    if "credentials_env_var" not in existing_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE clientes ADD COLUMN credentials_env_var VARCHAR(255)"))
+    _add_columns(
+        "clientes",
+        {
+            "credentials_env_var": "VARCHAR(255)",
+            "email": "VARCHAR(160)",
+            "descripcion": "TEXT",
+            "mensaje_bienvenida": "TEXT",
+            "informacion_general": "TEXT",
+            "instrucciones_asistente": "TEXT",
+            "duracion_cita_minutos": "INTEGER NOT NULL DEFAULT 60",
+        },
+    )
+    if inspector.has_table("servicios"):
+        _add_columns(
+            "servicios",
+            {
+                "descripcion": "TEXT",
+                "requiere_cita": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "disponible_por_llamada": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "disponible_por_whatsapp": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "notas_internas": "TEXT",
+            },
+        )
+
+
+def _add_columns(table_name: str, column_sql: dict[str, str]) -> None:
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    statements = [
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+        for column_name, definition in column_sql.items()
+        if column_name not in existing_columns
+    ]
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 @contextmanager

@@ -24,7 +24,7 @@ from services import (
     get_service_for_payload,
     normalize_phone,
     parse_start,
-    appointment_end,
+    appointment_end_for_client,
     require_fields,
     serialize_service,
     ServiceNotFoundError,
@@ -321,8 +321,14 @@ def check_availability():
             )
             servicio = get_service_for_payload(session, cliente, payload)
             start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
-            end = appointment_end(start, servicio)
-            available = check_client_availability(cliente, start, end)
+            end = appointment_end_for_client(start, cliente, servicio)
+            available = check_client_availability(
+                cliente,
+                start,
+                end,
+                servicio=servicio,
+                canal=payload.get("canal"),
+            )
             client_name = cliente.nombre
             logger.info(
                 "availability_result endpoint=/check-availability assistant_id=%s cliente_id=%s fecha=%s hora=%s available=%s",
@@ -789,7 +795,7 @@ def get_services_route():
     try:
         with session_scope() as session:
             cliente = get_client_for_payload(session, payload)
-            servicios = get_active_services(session, cliente)
+            servicios = get_active_services(session, cliente, payload.get("canal"))
             logger.info(
                 "services_listed endpoint=/get-services assistant_id=%s cliente_id=%s count=%s",
                 assistant_id,

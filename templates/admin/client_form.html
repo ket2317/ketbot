@@ -49,11 +49,35 @@
         <input class="ket-input" name="telefono" value="{{ cliente.telefono if cliente else '' }}">
       </div>
       <div class="col-md-6">
+        <label class="form-label">Correo</label>
+        <input class="ket-input" type="email" name="email" value="{{ cliente.email if cliente else '' }}">
+      </div>
+      <div class="col-md-6">
         <label class="form-label">Direccion</label>
         <input class="ket-input" name="direccion" value="{{ cliente.direccion if cliente else '' }}">
       </div>
+      <div class="col-md-3">
+        <label class="form-label">Duracion predeterminada</label>
+        <input class="ket-input" type="number" min="1" name="duracion_cita_minutos" value="{{ cliente.duracion_cita_minutos if cliente else 60 }}" required>
+      </div>
       <div class="col-12">
-        <label class="form-label">Notas para prompt</label>
+        <label class="form-label">Descripcion</label>
+        <textarea class="ket-input" name="descripcion" rows="3">{{ cliente.descripcion if cliente else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Mensaje de bienvenida</label>
+        <textarea class="ket-input" name="mensaje_bienvenida" rows="3">{{ cliente.mensaje_bienvenida if cliente else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Informacion general</label>
+        <textarea class="ket-input" name="informacion_general" rows="4">{{ cliente.informacion_general if cliente else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Instrucciones especiales del asistente</label>
+        <textarea class="ket-input" name="instrucciones_asistente" rows="4">{{ cliente.instrucciones_asistente if cliente else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Notas para prompt heredadas</label>
         <textarea class="ket-input" name="prompt" rows="4">{{ cliente.prompt if cliente else '' }}</textarea>
       </div>
       <div class="col-12">

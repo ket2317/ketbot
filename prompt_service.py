@@ -16,9 +16,13 @@ def generate_client_prompt(cliente: Cliente, servicios: list[Servicio]) -> str:
         horario_fin=cliente.horario_fin.strftime("%H:%M"),
         telefono=cliente.telefono or "No especificado",
         direccion=cliente.direccion or "No especificada",
+        email=cliente.email or "No especificado",
+        descripcion=cliente.descripcion or "No especificada",
+        mensaje_bienvenida=cliente.mensaje_bienvenida or "",
+        informacion_general=cliente.informacion_general or "",
         timezone=cliente.timezone,
         servicios=services_text,
-        prompt_extra=cliente.prompt or "",
+        prompt_extra=cliente.instrucciones_asistente or cliente.prompt or "",
     ).strip()
 
 
@@ -29,5 +33,14 @@ def _format_services(servicios: list[Servicio]) -> str:
     lines = []
     for servicio in servicios:
         price = f"${servicio.precio:g}" if servicio.precio is not None else "precio por confirmar"
-        lines.append(f"- {servicio.nombre}: {price}, duracion {servicio.duracion_minutos} minutos")
+        description = f". {servicio.descripcion}" if servicio.descripcion else ""
+        channels = []
+        if servicio.disponible_por_llamada:
+            channels.append("llamada")
+        if servicio.disponible_por_whatsapp:
+            channels.append("WhatsApp")
+        channel_text = f", disponible por {' y '.join(channels)}" if channels else ", no disponible por canales automatizados"
+        lines.append(
+            f"- {servicio.nombre}: {price}, duracion {servicio.duracion_minutos} minutos{channel_text}{description}"
+        )
     return "\n".join(lines)

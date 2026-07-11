@@ -1,0 +1,60 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="ket-client-header">
+  <div>
+    <a class="ket-back-link" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">
+      <i data-lucide="arrow-left"></i>
+      {{ cliente.nombre }}
+    </a>
+    <div class="ket-client-title-row">
+      <h1 class="ket-title-2">Horarios</h1>
+      <span class="ket-badge {{ 'ket-badge-success' if cliente.activo else 'ket-badge-muted' }}">
+        {{ "Activo" if cliente.activo else "Inactivo" }}
+      </span>
+    </div>
+  </div>
+</section>
+
+<nav class="ket-client-menu" aria-label="Cliente">
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Información del negocio</a>
+  <a class="active" href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
+  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
+  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Disponibilidad de servicios</a>
+  <a href="#">Citas</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Estado del asistente</a>
+</nav>
+
+<form method="post" class="ket-card ket-form-card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="ket-hours-list">
+    {% for row in hours %}
+      {% set label = dict(weekdays).get(row.weekday) %}
+      <div class="ket-hours-row">
+        <div>
+          <strong>{{ label }}</strong>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="open_{{ row.weekday }}" id="open_{{ row.weekday }}" {% if row.is_open %}checked{% endif %}>
+            <label class="form-check-label" for="open_{{ row.weekday }}">Abierto</label>
+          </div>
+        </div>
+        <div>
+          <label class="form-label">Apertura</label>
+          <input class="ket-input" type="time" name="start_{{ row.weekday }}" value="{{ row.start_time.strftime('%H:%M') }}" required>
+        </div>
+        <div>
+          <label class="form-label">Cierre</label>
+          <input class="ket-input" type="time" name="end_{{ row.weekday }}" value="{{ row.end_time.strftime('%H:%M') }}" required>
+        </div>
+        <div>
+          <label class="form-label">Descansos JSON</label>
+          <input class="ket-input" name="breaks_{{ row.weekday }}" value="{{ row.breaks_json if row.breaks_json != '[]' else '' }}" placeholder='[{"start":"13:00","end":"14:00"}]'>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="ket-actions justify-content-end mt-4">
+    <a class="ket-button ket-button-secondary" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Cancelar</a>
+    <button class="ket-button ket-button-primary" type="submit"><i data-lucide="save"></i>Guardar horarios</button>
+  </div>
+</form>
+{% endblock %}

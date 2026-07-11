@@ -25,10 +25,65 @@
         <input class="ket-input" type="number" min="1" name="duracion_minutos" value="{{ servicio.duracion_minutos if servicio else 60 }}" required>
       </div>
       <div class="col-12">
+        <label class="form-label">Descripcion</label>
+        <textarea class="ket-input" name="descripcion" rows="3">{{ servicio.descripcion if servicio else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Notas internas</label>
+        <textarea class="ket-input" name="notas_internas" rows="3">{{ servicio.notas_internas if servicio else '' }}</textarea>
+      </div>
+      <div class="col-12">
+        <div class="ket-check-row">
         <div class="form-check">
           <input class="form-check-input" type="checkbox" name="activo" id="activo" {% if not servicio or servicio.activo %}checked{% endif %}>
           <label class="form-check-label" for="activo">Activo</label>
         </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="requiere_cita" id="requiere_cita" {% if not servicio or servicio.requiere_cita %}checked{% endif %}>
+          <label class="form-check-label" for="requiere_cita">Requiere cita</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="disponible_por_llamada" id="disponible_por_llamada" {% if not servicio or servicio.disponible_por_llamada %}checked{% endif %}>
+          <label class="form-check-label" for="disponible_por_llamada">Disponible por llamada</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="disponible_por_whatsapp" id="disponible_por_whatsapp" {% if not servicio or servicio.disponible_por_whatsapp %}checked{% endif %}>
+          <label class="form-check-label" for="disponible_por_whatsapp">Disponible por WhatsApp</label>
+        </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ket-form-section">
+      <div>
+        <h2 class="ket-title-3">Disponibilidad</h2>
+        <p class="ket-text-muted">Define cuándo se puede agendar este servicio.</p>
+      </div>
+      <div class="ket-hours-list">
+        {% for weekday, label in weekdays %}
+          {% set row = availability_by_day.get(weekday) %}
+          <div class="ket-hours-row">
+            <div>
+              <strong>{{ label }}</strong>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="available_{{ weekday }}" id="available_{{ weekday }}" {% if not row or row.is_available %}checked{% endif %}>
+                <label class="form-check-label" for="available_{{ weekday }}">Disponible</label>
+              </div>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="use_business_hours_{{ weekday }}" id="use_business_hours_{{ weekday }}" {% if not row or row.use_business_hours %}checked{% endif %}>
+              <label class="form-check-label" for="use_business_hours_{{ weekday }}">Usar horario del negocio</label>
+            </div>
+            <div>
+              <label class="form-label">Inicio</label>
+              <input class="ket-input" type="time" name="service_start_{{ weekday }}" value="{{ row.start_time.strftime('%H:%M') if row and row.start_time else '09:00' }}">
+            </div>
+            <div>
+              <label class="form-label">Fin</label>
+              <input class="ket-input" type="time" name="service_end_{{ weekday }}" value="{{ row.end_time.strftime('%H:%M') if row and row.end_time else '17:00' }}">
+            </div>
+          </div>
+        {% endfor %}
       </div>
     </div>
     <div class="ket-actions justify-content-end mt-4">

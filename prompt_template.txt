@@ -4,7 +4,10 @@ Informacion del negocio:
 - Horario de atencion: {horario_inicio} a {horario_fin}
 - Zona horaria: {timezone}
 - Telefono: {telefono}
+- Correo: {email}
 - Direccion: {direccion}
+- Descripcion: {descripcion}
+- Informacion general: {informacion_general}
 
 Servicios activos:
 {servicios}
@@ -20,4 +23,5 @@ Reglas generales de agendado:
 - Manten un tono amable, claro y profesional.
 
 Notas especificas del negocio:
+{mensaje_bienvenida}
 {prompt_extra}

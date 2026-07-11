@@ -14,7 +14,7 @@ from models import Cliente
 from services import (
     AvailabilityError,
     ServiceNotFoundError,
-    appointment_end,
+    appointment_end_for_client,
     cancel_appointment,
     check_client_availability,
     create_appointment,
@@ -76,7 +76,7 @@ def generar_respuesta_asistente(telefono: str, mensaje: str, canal: str, assista
             )
 
             if intent == "services":
-                servicios = get_active_services(session, cliente)
+                servicios = get_active_services(session, cliente, canal)
                 return _services_response(servicios)
 
             if intent == "cancel":
@@ -108,8 +108,8 @@ def generar_respuesta_asistente(telefono: str, mensaje: str, canal: str, assista
                     return missing
                 servicio = get_service_for_payload(session, cliente, payload)
                 start = parse_start(payload["fecha"], payload["hora"], cliente.timezone)
-                end = appointment_end(start, servicio)
-                available = check_client_availability(cliente, start, end)
+                end = appointment_end_for_client(start, cliente, servicio)
+                available = check_client_availability(cliente, start, end, servicio=servicio, canal=canal)
                 if available:
                     return f"Sí hay disponibilidad el {payload['fecha']} a las {payload['hora']}."
                 return f"No hay disponibilidad el {payload['fecha']} a las {payload['hora']}."

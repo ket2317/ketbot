@@ -1,3 +1,5 @@
+import json
+import logging
 import secrets
 from datetime import time
 from decimal import Decimal, InvalidOperation
@@ -11,11 +13,21 @@ from sqlalchemy.exc import IntegrityError
 
 from config import Config
 from database import session_scope
-from models import Cliente, Servicio
+from models import ClientBusinessHour, Cliente, ServiceAvailability, Servicio
 
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 F = TypeVar("F", bound=Callable)
+logger = logging.getLogger(__name__)
+WEEKDAYS = [
+    (0, "Lunes"),
+    (1, "Martes"),
+    (2, "Miércoles"),
+    (3, "Jueves"),
+    (4, "Viernes"),
+    (5, "Sábado"),
+    (6, "Domingo"),
+]
 
 
 def admin_auth_required(view: F) -> F:
@@ -81,8 +93,11 @@ def client_new():
     if request.method == "POST":
         try:
             with session_scope() as session:
-                session.add(_client_from_form(Cliente()))
+                cliente = _client_from_form(Cliente())
+                session.add(cliente)
                 session.flush()
+                _ensure_business_hours(session, cliente)
+                logger.info("admin_change entity=cliente action=created client_id=%s admin=%s", cliente.id, _admin_name())
             flash("Cliente creado.", "success")
             return redirect(url_for("admin.clients_index"))
         except (ValueError, IntegrityError) as exc:
@@ -104,6 +119,7 @@ def client_edit(client_id: int):
             try:
                 _client_from_form(cliente)
                 session.flush()
+                logger.info("admin_change entity=cliente action=updated client_id=%s admin=%s", client_id, _admin_name())
                 flash("Cliente actualizado.", "success")
                 return redirect(url_for("admin.clients_index"))
             except (ValueError, IntegrityError) as exc:
@@ -123,8 +139,38 @@ def client_toggle(client_id: int):
             flash("Cliente no encontrado.", "danger")
         else:
             cliente.activo = not cliente.activo
+            logger.info(
+                "admin_change entity=cliente action=toggle client_id=%s active=%s admin=%s",
+                client_id,
+                cliente.activo,
+                _admin_name(),
+            )
             flash("Estado del cliente actualizado.", "success")
     return redirect(url_for("admin.clients_index"))
+
+
+@admin_bp.route("/clients/<int:client_id>/hours", methods=["GET", "POST"])
+@admin_auth_required
+def client_hours(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            flash("Cliente no encontrado.", "danger")
+            return redirect(url_for("admin.clients_index"))
+
+        _ensure_business_hours(session, cliente)
+        if request.method == "POST":
+            try:
+                _business_hours_from_form(cliente)
+                session.flush()
+                logger.info("admin_change entity=business_hours action=updated client_id=%s admin=%s", client_id, _admin_name())
+                flash("Horarios actualizados.", "success")
+                return redirect(url_for("admin.client_hours", client_id=client_id))
+            except ValueError as exc:
+                flash(f"No se pudieron actualizar los horarios: {exc}", "danger")
+
+        hours = sorted(cliente.horarios, key=lambda row: row.weekday)
+        return render_template("admin/client_hours.html", cliente=cliente, hours=hours, weekdays=WEEKDAYS)
 
 
 @admin_bp.get("/clients/<int:client_id>/services")
@@ -155,6 +201,13 @@ def service_new(client_id: int):
                 servicio = _service_from_form(Servicio(cliente_id=client_id))
                 session.add(servicio)
                 session.flush()
+                _service_availability_from_form(session, servicio)
+                logger.info(
+                    "admin_change entity=servicio action=created client_id=%s service_id=%s admin=%s",
+                    client_id,
+                    servicio.id,
+                    _admin_name(),
+                )
                 flash("Servicio creado.", "success")
                 return redirect(url_for("admin.services_index", client_id=client_id))
             except (ValueError, IntegrityError) as exc:
@@ -162,7 +215,15 @@ def service_new(client_id: int):
                     session.rollback()
                 flash(f"No se pudo crear el servicio: {_form_error(exc)}", "danger")
 
-        return render_template("admin/service_form.html", cliente=cliente, servicio=None, title="Crear servicio")
+        return render_template(
+            "admin/service_form.html",
+            cliente=cliente,
+            servicio=None,
+            title="Crear servicio",
+            availability=[],
+            availability_by_day={},
+            weekdays=WEEKDAYS,
+        )
 
 
 @admin_bp.route("/services/<int:service_id>/edit", methods=["GET", "POST"])
@@ -178,7 +239,14 @@ def service_edit(service_id: int):
         if request.method == "POST":
             try:
                 _service_from_form(servicio)
+                _service_availability_from_form(session, servicio)
                 session.flush()
+                logger.info(
+                    "admin_change entity=servicio action=updated client_id=%s service_id=%s admin=%s",
+                    servicio.cliente_id,
+                    servicio.id,
+                    _admin_name(),
+                )
                 flash("Servicio actualizado.", "success")
                 return redirect(url_for("admin.services_index", client_id=servicio.cliente_id))
             except (ValueError, IntegrityError) as exc:
@@ -186,7 +254,16 @@ def service_edit(service_id: int):
                     session.rollback()
                 flash(f"No se pudo actualizar el servicio: {_form_error(exc)}", "danger")
 
-        return render_template("admin/service_form.html", cliente=cliente, servicio=servicio, title="Editar servicio")
+        _ensure_service_availability(session, servicio)
+        return render_template(
+            "admin/service_form.html",
+            cliente=cliente,
+            servicio=servicio,
+            title="Editar servicio",
+            availability=sorted(servicio.disponibilidad, key=lambda row: row.weekday),
+            availability_by_day={row.weekday: row for row in servicio.disponibilidad},
+            weekdays=WEEKDAYS,
+        )
 
 
 @admin_bp.post("/services/<int:service_id>/toggle")
@@ -200,6 +277,13 @@ def service_toggle(service_id: int):
         else:
             servicio.activo = not servicio.activo
             client_id = servicio.cliente_id
+            logger.info(
+                "admin_change entity=servicio action=toggle client_id=%s service_id=%s active=%s admin=%s",
+                client_id,
+                servicio.id,
+                servicio.activo,
+                _admin_name(),
+            )
             flash("Estado del servicio actualizado.", "success")
 
     if client_id is None:
@@ -219,20 +303,119 @@ def _client_from_form(cliente: Cliente) -> Cliente:
         raise ValueError("El horario fin debe ser mayor al horario inicio.")
     cliente.timezone = _required("timezone")
     cliente.telefono = request.form.get("telefono", "").strip()
+    cliente.email = request.form.get("email", "").strip()
     cliente.direccion = request.form.get("direccion", "").strip()
+    cliente.descripcion = request.form.get("descripcion", "").strip()
+    cliente.mensaje_bienvenida = request.form.get("mensaje_bienvenida", "").strip()
+    cliente.informacion_general = request.form.get("informacion_general", "").strip()
+    cliente.instrucciones_asistente = request.form.get("instrucciones_asistente", "").strip()
     cliente.prompt = request.form.get("prompt", "").strip()
+    cliente.duracion_cita_minutos = int(request.form.get("duracion_cita_minutos", "60") or 60)
+    if cliente.duracion_cita_minutos <= 0:
+        raise ValueError("La duración predeterminada debe ser mayor a cero.")
     cliente.activo = request.form.get("activo") == "on"
     return cliente
 
 
 def _service_from_form(servicio: Servicio) -> Servicio:
     servicio.nombre = _required("nombre")
+    servicio.descripcion = request.form.get("descripcion", "").strip()
     servicio.precio = _parse_decimal(request.form.get("precio", "").strip())
     servicio.duracion_minutos = int(_required("duracion_minutos"))
     if servicio.duracion_minutos <= 0:
         raise ValueError("La duracion debe ser mayor a cero.")
+    servicio.requiere_cita = request.form.get("requiere_cita") == "on"
+    servicio.disponible_por_llamada = request.form.get("disponible_por_llamada") == "on"
+    servicio.disponible_por_whatsapp = request.form.get("disponible_por_whatsapp") == "on"
+    servicio.notas_internas = request.form.get("notas_internas", "").strip()
     servicio.activo = request.form.get("activo") == "on"
     return servicio
+
+
+def _ensure_business_hours(session, cliente: Cliente) -> None:
+    existing = {row.weekday: row for row in cliente.horarios}
+    for weekday, _label in WEEKDAYS:
+        if weekday in existing:
+            continue
+        row = ClientBusinessHour(
+            cliente_id=cliente.id,
+            weekday=weekday,
+            is_open=weekday < 6,
+            start_time=cliente.horario_inicio,
+            end_time=cliente.horario_fin,
+            breaks_json="[]",
+        )
+        cliente.horarios.append(row)
+        session.add(row)
+    session.flush()
+
+
+def _business_hours_from_form(cliente: Cliente) -> None:
+    rows = {row.weekday: row for row in cliente.horarios}
+    for weekday, _label in WEEKDAYS:
+        row = rows[weekday]
+        row.is_open = request.form.get(f"open_{weekday}") == "on"
+        row.start_time = _parse_time(_required(f"start_{weekday}"))
+        row.end_time = _parse_time(_required(f"end_{weekday}"))
+        if row.end_time <= row.start_time:
+            raise ValueError("La hora de cierre debe ser mayor a la hora de apertura.")
+        row.breaks_json = _normalize_breaks(request.form.get(f"breaks_{weekday}", "").strip())
+
+
+def _ensure_service_availability(session, servicio: Servicio) -> None:
+    existing = {row.weekday: row for row in servicio.disponibilidad}
+    for weekday, _label in WEEKDAYS:
+        if weekday in existing:
+            continue
+        row = ServiceAvailability(
+            service_id=servicio.id,
+            weekday=weekday,
+            is_available=True,
+            use_business_hours=True,
+        )
+        servicio.disponibilidad.append(row)
+        session.add(row)
+    session.flush()
+
+
+def _service_availability_from_form(session, servicio: Servicio) -> None:
+    if servicio.id is None:
+        session.flush()
+    _ensure_service_availability(session, servicio)
+    rows = {row.weekday: row for row in servicio.disponibilidad}
+    for weekday, _label in WEEKDAYS:
+        row = rows[weekday]
+        row.is_available = request.form.get(f"available_{weekday}") == "on"
+        row.use_business_hours = request.form.get(f"use_business_hours_{weekday}") == "on"
+        start_value = request.form.get(f"service_start_{weekday}", "").strip()
+        end_value = request.form.get(f"service_end_{weekday}", "").strip()
+        if row.use_business_hours:
+            row.start_time = None
+            row.end_time = None
+            continue
+        row.start_time = _parse_time(start_value)
+        row.end_time = _parse_time(end_value)
+        if row.end_time <= row.start_time:
+            raise ValueError("La hora final del servicio debe ser mayor a la hora inicial.")
+
+
+def _normalize_breaks(value: str) -> str:
+    if not value:
+        return "[]"
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Los descansos deben ser JSON válido, ejemplo: [{\"start\":\"13:00\",\"end\":\"14:00\"}].") from exc
+    if not isinstance(parsed, list):
+        raise ValueError("Los descansos deben ser una lista JSON.")
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError("Cada descanso debe tener start y end.")
+        start = _parse_time(str(item.get("start", "")))
+        end = _parse_time(str(item.get("end", "")))
+        if end <= start:
+            raise ValueError("Cada descanso debe terminar después de iniciar.")
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 def _required(field: str) -> str:
@@ -263,3 +446,8 @@ def _form_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return "revisa que los valores únicos no estén duplicados."
     return str(exc)
+
+
+def _admin_name() -> str:
+    auth = request.authorization
+    return auth.username if auth else "unknown"

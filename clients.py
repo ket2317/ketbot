@@ -3,6 +3,7 @@ from datetime import time
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from models import Cliente
@@ -97,6 +98,7 @@ def seed_initial_clients(session: Session) -> None:
         prompt="Asistente de RPM Automotive para agendar citas de servicio automotriz.",
         activo=True,
     )
+    _ensure_default_business_hours(session)
     _upsert_client(
         session,
         assistant_id=Config.UNAS_ASSISTANT_ID,
@@ -122,6 +124,28 @@ def _upsert_client(session: Session, **data: Any) -> None:
 
     if not client.credentials_env_var and data.get("credentials_env_var"):
         client.credentials_env_var = data["credentials_env_var"]
+
+
+def _ensure_default_business_hours(session: Session) -> None:
+    clients = session.scalars(select(Cliente)).all()
+    for client in clients:
+        for weekday in range(7):
+            session.execute(
+                text(
+                    "INSERT INTO client_business_hours "
+                    "(cliente_id, weekday, is_open, start_time, end_time, breaks_json) "
+                    "VALUES (:cliente_id, :weekday, :is_open, :start_time, :end_time, :breaks_json) "
+                    "ON CONFLICT (cliente_id, weekday) DO NOTHING"
+                ),
+                {
+                    "cliente_id": client.id,
+                    "weekday": weekday,
+                    "is_open": weekday < 6,
+                    "start_time": client.horario_inicio.strftime("%H:%M:%S"),
+                    "end_time": client.horario_fin.strftime("%H:%M:%S"),
+                    "breaks_json": "[]",
+                },
+            )
 
 
 def _nested_id(value: Any) -> str | None:
