@@ -43,6 +43,9 @@
       <a class="ket-button ket-button-secondary" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">
         Entrar
       </a>
+      <a class="ket-button ket-button-ghost" href="{{ url_for('admin.client_activity', client_id=cliente.id) }}">
+        Actividad
+      </a>
     </div>
   </article>
   {% else %}

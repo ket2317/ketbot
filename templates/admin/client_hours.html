@@ -16,13 +16,10 @@
 </section>
 
 <nav class="ket-client-menu" aria-label="Cliente">
-  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Información del negocio</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Configuración</a>
   <a class="active" href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
   <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
-  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Disponibilidad de servicios</a>
-  <a href="#">Citas</a>
   <a href="{{ url_for('admin.client_activity', client_id=cliente.id) }}">Actividad</a>
-  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Estado del asistente</a>
 </nav>
 
 <form method="post" class="ket-card ket-form-card">

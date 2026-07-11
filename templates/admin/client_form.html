@@ -9,6 +9,15 @@
     <a class="ket-button ket-button-secondary" href="{{ url_for('admin.clients_index') }}"><i data-lucide="x"></i>Cerrar</a>
   </div>
 
+  {% if cliente %}
+  <nav class="ket-client-menu" aria-label="Cliente">
+    <a class="active" href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Configuración</a>
+    <a href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
+    <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
+    <a href="{{ url_for('admin.client_activity', client_id=cliente.id) }}">Actividad</a>
+  </nav>
+  {% endif %}
+
   <form method="post" class="ket-card ket-form-card">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row g-3 ket-form-grid">

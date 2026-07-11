@@ -651,6 +651,126 @@ class ActivityServiceTest(unittest.TestCase):
             self.assertTrue(pdf.startswith(b"%PDF"))
 
 
+def auth_header():
+    token = base64.b64encode(b"admin:secret").decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+class ActivityAdminRoutesTest(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        Config.ADMIN_USERNAME = "admin"
+        Config.ADMIN_PASSWORD = "secret"
+        Config.SECRET_KEY = "test-secret"
+        self.client = app.test_client()
+
+    def test_client_activity_page_returns_200_and_client_link_points_to_activity(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            negocio = make_client(session, suffix, name="Cliente Cuatro")
+            client_id = negocio.id
+
+        page = self.client.get(f"/admin/clients/{client_id}/activity", headers=auth_header())
+        index = self.client.get("/admin/", headers=auth_header())
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(f"Actividad — Cliente Cuatro {suffix}".encode(), page.data)
+        self.assertIn(f"/admin/clients/{client_id}/activity".encode(), index.data)
+
+    def test_client_activity_does_not_show_other_client_activity(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client_three = make_client(session, suffix + "c3", name="Cliente Tres")
+            client_four = make_client(session, suffix + "c4", name="Cliente Cuatro")
+            record_activity(
+                session,
+                client_three,
+                channel="vapi",
+                outcome="information_provided",
+                event_type="information_provided",
+                customer_name="Dato de Cliente Tres",
+                customer_phone="55 3333 3333",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            record_activity(
+                session,
+                client_four,
+                channel="vapi",
+                outcome="information_provided",
+                event_type="information_provided",
+                customer_name="Dato de Cliente Cuatro",
+                customer_phone="55 4444 4444",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            client_four_id = client_four.id
+
+        response = self.client.get(
+            f"/admin/clients/{client_four_id}/activity?period=custom&start_date=2026-07-10&end_date=2026-07-10",
+            headers=auth_header(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Dato de Cliente Cuatro", response.data)
+        self.assertNotIn(b"Dato de Cliente Tres", response.data)
+
+    def test_csv_pdf_and_detail_are_scoped_to_client(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client_three = make_client(session, suffix + "x3", name="Cliente Tres")
+            client_four = make_client(session, suffix + "x4", name="Unas La Comer")
+            other_activity = record_activity(
+                session,
+                client_three,
+                channel="vapi",
+                outcome="information_provided",
+                event_type="information_provided",
+                customer_name="Privado Tres",
+                customer_phone="55 3333 3333",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            record_activity(
+                session,
+                client_four,
+                channel="vapi",
+                outcome="appointment_created",
+                event_type="appointment_created",
+                customer_name="Publico Cuatro",
+                customer_phone="55 4444 4444",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            client_four_id = client_four.id
+            other_activity_id = other_activity.id
+
+        query = "period=custom&start_date=2026-07-01&end_date=2026-07-31"
+        csv_response = self.client.get(f"/admin/clients/{client_four_id}/activity/export.csv?{query}", headers=auth_header())
+        pdf_response = self.client.get(f"/admin/clients/{client_four_id}/activity/report.pdf?{query}", headers=auth_header())
+        detail_response = self.client.get(f"/admin/clients/{client_four_id}/activity/{other_activity_id}", headers=auth_header())
+
+        self.assertEqual(csv_response.status_code, 200)
+        self.assertIn(b"Publico Cuatro", csv_response.data)
+        self.assertNotIn(b"Privado Tres", csv_response.data)
+        self.assertIn("actividad_unas_la_comer", csv_response.headers["Content-Disposition"])
+        self.assertIn("2026-07", csv_response.headers["Content-Disposition"])
+        self.assertIn(b"Unas La Comer", pdf_response.data)
+        self.assertIn("reporte_unas_la_comer", pdf_response.headers["Content-Disposition"])
+        self.assertEqual(detail_response.status_code, 404)
+
+    def test_download_links_preserve_date_filters(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            negocio = make_client(session, suffix, name="Filtros")
+            client_id = negocio.id
+
+        response = self.client.get(
+            f"/admin/clients/{client_id}/activity?period=custom&start_date=2026-07-01&end_date=2026-07-31&channel=vapi",
+            headers=auth_header(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"/admin/clients/{client_id}/activity/report.pdf?period=custom&amp;start_date=2026-07-01&amp;end_date=2026-07-31&amp;channel=vapi".encode(), response.data)
+        self.assertIn(f"/admin/clients/{client_id}/activity/export.csv?period=custom&amp;start_date=2026-07-01&amp;end_date=2026-07-31&amp;channel=vapi".encode(), response.data)
+
+
 class AdminAuthTest(unittest.TestCase):
     def setUp(self):
         Config.ADMIN_USERNAME = "admin"
@@ -668,9 +788,8 @@ class AdminAuthTest(unittest.TestCase):
     def test_admin_routes_allow_basic_auth(self):
         app.config["TESTING"] = True
         client = app.test_client()
-        token = base64.b64encode(b"admin:secret").decode("ascii")
 
-        response = client.get("/admin/", headers={"Authorization": f"Basic {token}"})
+        response = client.get("/admin/", headers=auth_header())
 
         self.assertEqual(response.status_code, 200)
 

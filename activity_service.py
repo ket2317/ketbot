@@ -1,6 +1,8 @@
 import csv
 import io
 import json
+import re
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -319,12 +321,14 @@ def serialize_activity_detail(activity: ActivityInteraction, timezone: str) -> d
 def export_csv(activities: list[ActivityInteraction], timezone: str) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["fecha", "cliente", "telefono", "canal", "servicio", "resultado", "duracion", "cita", "estado"])
+    writer.writerow(["fecha", "hora", "cliente", "telefono", "canal", "servicio", "resultado", "duracion", "cita_id", "estado"])
     for activity in activities:
         row = serialize_activity(activity, timezone)
+        local_datetime = row["started_at"].split(" ")
         writer.writerow(
             [
-                row["started_at"],
+                local_datetime[0],
+                local_datetime[1] if len(local_datetime) > 1 else "",
                 row["customer_name"],
                 row["customer_phone"],
                 row["channel"],
@@ -336,6 +340,21 @@ def export_csv(activities: list[ActivityInteraction], timezone: str) -> str:
             ]
         )
     return output.getvalue()
+
+
+def report_filename(cliente: Cliente, period: Period, extension: str, prefix: str) -> str:
+    period_part = period.display_start.strftime("%Y-%m")
+    if period.display_start != period.display_end and (
+        period.display_start.day != 1 or period.display_end.day not in (28, 29, 30, 31)
+    ):
+        period_part = f"{period.display_start.isoformat()}_{period.display_end.isoformat()}"
+    return f"{prefix}_{slugify(cliente.nombre)}_{period_part}.{extension}"
+
+
+def slugify(value: str) -> str:
+    ascii_value = unicodedata.normalize("NFKD", value.strip().lower()).encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"[^a-z0-9]+", "_", ascii_value).strip("_")
+    return normalized or "cliente"
 
 
 def generate_pdf_report(cliente: Cliente, period: Period, data: dict[str, Any]) -> bytes:

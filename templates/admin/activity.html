@@ -7,17 +7,17 @@
       {{ cliente.nombre }}
     </a>
     <div class="ket-client-title-row">
-      <h1 class="ket-title-2">Actividad</h1>
+      <h1 class="ket-title-2">Actividad — {{ cliente.nombre }}</h1>
       <span class="ket-badge {{ 'ket-badge-success' if cliente.activo else 'ket-badge-muted' }}">
         {{ "Activo" if cliente.activo else "Inactivo" }}
       </span>
     </div>
-    <p class="ket-text-muted">Consulta el desempeño del asistente, llamadas, servicios solicitados y citas generadas.</p>
+    <p class="ket-text-muted">Reporte y desempeño del asistente de este cliente.</p>
   </div>
   <div class="ket-actions">
     <a class="ket-button ket-button-secondary" href="{{ url_for('admin.client_activity_report_pdf', client_id=cliente.id, **request.args) }}">
       <i data-lucide="file-down"></i>
-      Descargar reporte
+      Descargar reporte PDF
     </a>
     <a class="ket-button ket-button-primary" href="{{ url_for('admin.client_activity_export_csv', client_id=cliente.id, **request.args) }}">
       <i data-lucide="download"></i>
@@ -27,13 +27,10 @@
 </section>
 
 <nav class="ket-client-menu" aria-label="Cliente">
-  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Información del negocio</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Configuración</a>
   <a href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
   <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
-  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Disponibilidad de servicios</a>
-  <a href="#">Citas</a>
   <a class="active" href="{{ url_for('admin.client_activity', client_id=cliente.id) }}">Actividad</a>
-  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Estado del asistente</a>
 </nav>
 
 <form class="ket-card ket-filter-bar" method="get">

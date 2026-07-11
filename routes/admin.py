@@ -18,6 +18,7 @@ from activity_service import (
     export_csv,
     generate_pdf_report,
     load_activities,
+    report_filename,
     resolve_period,
     serialize_activity,
     serialize_activity_detail,
@@ -287,7 +288,7 @@ def client_activity_export_csv(client_id: int):
         return Response(
             csv_text,
             mimetype="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="actividad-{cliente.id}.csv"'},
+            headers={"Content-Disposition": f'attachment; filename="{report_filename(cliente, period, "csv", "actividad")}"'},
         )
 
 
@@ -305,7 +306,7 @@ def client_activity_report_pdf(client_id: int):
         return Response(
             pdf_bytes,
             mimetype="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="actividad-{cliente.id}.pdf"'},
+            headers={"Content-Disposition": f'attachment; filename="{report_filename(cliente, period, "pdf", "reporte")}"'},
         )
 
 
