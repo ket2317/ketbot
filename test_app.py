@@ -19,7 +19,7 @@ from activity_service import dashboard_data, export_csv, generate_pdf_report, lo
 from config import Config
 from database import session_scope as session_scope_for_test
 from date_resolver import resolve_date_context
-from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio
+from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio, WhatsAppAccount
 from prompt_service import generate_client_prompt
 from services import (
     AppointmentClarificationError,
@@ -769,6 +769,169 @@ class ActivityAdminRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(f"/admin/clients/{client_id}/activity/report.pdf?period=custom&amp;start_date=2026-07-01&amp;end_date=2026-07-31&amp;channel=vapi".encode(), response.data)
         self.assertIn(f"/admin/clients/{client_id}/activity/export.csv?period=custom&amp;start_date=2026-07-01&amp;end_date=2026-07-31&amp;channel=vapi".encode(), response.data)
+
+
+class FakeWhatsAppResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"messages": [{"id": "wamid.test"}]}
+
+
+def whatsapp_payload(phone_number_id, from_phone="5215550000000", body="hola", message_id=None):
+    return {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "metadata": {"phone_number_id": phone_number_id},
+                            "messages": [
+                                {
+                                    "id": message_id or f"wamid.{uuid.uuid4().hex}",
+                                    "from": from_phone,
+                                    "text": {"body": body},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+
+class WhatsAppMultiTenantTest(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_verify_webhook_uses_database_verify_token(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix, name="WhatsApp Verify")
+            session.add(
+                WhatsAppAccount(
+                    cliente_id=client.id,
+                    phone_number_id=f"phone-verify-{suffix}",
+                    verify_token=f"verify-{suffix}",
+                    access_token_env_var="WA_VERIFY_TOKEN_ENV",
+                    activo=True,
+                )
+            )
+
+        response = self.client.get(
+            f"/whatsapp?hub.mode=subscribe&hub.verify_token=verify-{suffix}&hub.challenge=challenge-{suffix}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.decode(), f"challenge-{suffix}")
+
+    @patch("routes.whatsapp.WhatsAppClient.send_text")
+    @patch("routes.whatsapp.procesar_mensaje_cliente")
+    def test_unknown_phone_number_id_is_ignored_without_processing(self, processor, send_text):
+        response = self.client.post("/whatsapp", json=whatsapp_payload("unknown-phone-number"))
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["processed"], 0)
+        self.assertEqual(payload["ignored"], 1)
+        processor.assert_not_called()
+        send_text.assert_not_called()
+
+    @patch.dict(os.environ, {"WA_TOKEN_A": "token-a", "WA_TOKEN_B": "token-b"})
+    @patch("whatsapp_service.requests.post")
+    @patch("routes.whatsapp.procesar_mensaje_cliente")
+    def test_webhook_routes_message_and_response_to_matching_client(self, processor, requests_post):
+        suffix = uuid.uuid4().hex
+        requests_post.return_value = FakeWhatsAppResponse()
+        processor.return_value = "respuesta cliente b"
+        with session_scope_for_test() as session:
+            client_a = make_client(session, suffix + "wa", name="Cliente WA A")
+            client_b = make_client(session, suffix + "wb", name="Cliente WA B")
+            session.add_all(
+                [
+                    WhatsAppAccount(
+                        cliente_id=client_a.id,
+                        phone_number_id=f"phone-a-{suffix}",
+                        verify_token=f"verify-a-{suffix}",
+                        access_token_env_var="WA_TOKEN_A",
+                        activo=True,
+                    ),
+                    WhatsAppAccount(
+                        cliente_id=client_b.id,
+                        phone_number_id=f"phone-b-{suffix}",
+                        verify_token=f"verify-b-{suffix}",
+                        access_token_env_var="WA_TOKEN_B",
+                        activo=True,
+                    ),
+                ]
+            )
+            client_a_id = client_a.id
+            client_b_id = client_b.id
+            assistant_b = client_b.assistant_id
+
+        response = self.client.post(
+            "/whatsapp",
+            json=whatsapp_payload(f"phone-b-{suffix}", from_phone="5215511112222", body="quiero servicios"),
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["processed"], 1)
+        processor.assert_called_once_with(
+            telefono="5215511112222",
+            mensaje="quiero servicios",
+            canal="whatsapp",
+            assistant_id=assistant_b,
+        )
+        sent_url = requests_post.call_args.args[0]
+        sent_headers = requests_post.call_args.kwargs["headers"]
+        self.assertIn(f"phone-b-{suffix}/messages", sent_url)
+        self.assertEqual(sent_headers["Authorization"], "Bearer token-b")
+        self.assertNotIn("token-a", str(requests_post.call_args))
+
+        with session_scope_for_test() as session:
+            client_a_count = session.query(ActivityInteraction).filter_by(cliente_id=client_a_id).count()
+            client_b_count = session.query(ActivityInteraction).filter_by(cliente_id=client_b_id).count()
+
+        self.assertEqual(client_a_count, 0)
+        self.assertEqual(client_b_count, 1)
+
+    def test_client_form_shows_whatsapp_settings_without_access_token(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix, name="WhatsApp Admin")
+            session.add(
+                WhatsAppAccount(
+                    cliente_id=client.id,
+                    phone_number_id=f"phone-admin-{suffix}",
+                    verify_token=f"verify-admin-{suffix}",
+                    access_token_env_var="WA_ADMIN_TOKEN",
+                    access_token="super-secret-token",
+                    activo=True,
+                )
+            )
+            client_id = client.id
+
+        response = self.client.get(f"/admin/clients/{client_id}/edit", headers=auth_header())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"phone-admin-{suffix}".encode(), response.data)
+        self.assertIn(f"verify-admin-{suffix}".encode(), response.data)
+        self.assertIn(b"WA_ADMIN_TOKEN", response.data)
+        self.assertNotIn(b"super-secret-token", response.data)
+
+    def test_vapi_contract_still_requires_assistant_id_and_works_for_voice_route(self):
+        response = self.client.post(
+            "/check-availability",
+            json={"fecha": "2026-07-22", "hora": "18:00", "canal": "vapi"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"assistant_id requerido", response.data)
 
 
 class AdminAuthTest(unittest.TestCase):

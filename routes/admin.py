@@ -25,7 +25,7 @@ from activity_service import (
 )
 from config import Config
 from database import session_scope
-from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio
+from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio, WhatsAppAccount
 
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -108,6 +108,7 @@ def client_new():
                 cliente = _client_from_form(Cliente())
                 session.add(cliente)
                 session.flush()
+                _whatsapp_account_from_form(session, cliente)
                 _ensure_business_hours(session, cliente)
                 logger.info("admin_change entity=cliente action=created client_id=%s admin=%s", cliente.id, _admin_name())
             flash("Cliente creado.", "success")
@@ -115,7 +116,7 @@ def client_new():
         except (ValueError, IntegrityError) as exc:
             flash(f"No se pudo crear el cliente: {_form_error(exc)}", "danger")
 
-    return render_template("admin/client_form.html", cliente=None, title="Crear cliente")
+    return render_template("admin/client_form.html", cliente=None, title="Crear cliente", whatsapp_account=None)
 
 
 @admin_bp.route("/clients/<int:client_id>/edit", methods=["GET", "POST"])
@@ -130,6 +131,7 @@ def client_edit(client_id: int):
         if request.method == "POST":
             try:
                 _client_from_form(cliente)
+                _whatsapp_account_from_form(session, cliente)
                 session.flush()
                 logger.info("admin_change entity=cliente action=updated client_id=%s admin=%s", client_id, _admin_name())
                 flash("Cliente actualizado.", "success")
@@ -139,7 +141,12 @@ def client_edit(client_id: int):
                     session.rollback()
                 flash(f"No se pudo actualizar el cliente: {_form_error(exc)}", "danger")
 
-        return render_template("admin/client_form.html", cliente=cliente, title="Editar cliente")
+        return render_template(
+            "admin/client_form.html",
+            cliente=cliente,
+            title="Editar cliente",
+            whatsapp_account=_primary_whatsapp_account(cliente),
+        )
 
 
 @admin_bp.post("/clients/<int:client_id>/toggle")
@@ -438,6 +445,37 @@ def _client_from_form(cliente: Cliente) -> Cliente:
         raise ValueError("La duración predeterminada debe ser mayor a cero.")
     cliente.activo = request.form.get("activo") == "on"
     return cliente
+
+
+def _primary_whatsapp_account(cliente: Cliente) -> WhatsAppAccount | None:
+    accounts = sorted(cliente.whatsapp_accounts, key=lambda row: row.id or 0)
+    return accounts[0] if accounts else None
+
+
+def _whatsapp_account_from_form(session, cliente: Cliente) -> None:
+    phone_number_id = request.form.get("whatsapp_phone_number_id", "").strip()
+    verify_token = request.form.get("whatsapp_verify_token", "").strip()
+    access_token_env_var = request.form.get("whatsapp_access_token_env_var", "").strip()
+    activo = request.form.get("whatsapp_activo") == "on"
+    existing = _primary_whatsapp_account(cliente)
+
+    if not any((phone_number_id, verify_token, access_token_env_var, activo)):
+        if existing is not None:
+            session.delete(existing)
+        return
+
+    if not phone_number_id:
+        raise ValueError("phone_number_id de WhatsApp es requerido si WhatsApp está configurado.")
+
+    account = existing or WhatsAppAccount(cliente_id=cliente.id)
+    account.phone_number_id = phone_number_id
+    account.verify_token = verify_token or None
+    account.access_token_env_var = access_token_env_var
+    account.activo = activo
+    if existing is None:
+        cliente.whatsapp_accounts.append(account)
+        session.add(account)
+    logger.info("admin_change entity=whatsapp_account action=upsert client_id=%s admin=%s", cliente.id, _admin_name())
 
 
 def _service_from_form(servicio: Servicio) -> Servicio:

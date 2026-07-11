@@ -7,7 +7,6 @@ from typing import Any
 
 from calendar_service import CalendarServiceError
 from clients import ClientLookupError, get_active_client_by_assistant_id
-from config import Config
 from date_resolver import client_today, normalize_date_text, resolve_date_text
 from database import session_scope
 from models import Cliente
@@ -128,8 +127,6 @@ def generar_respuesta_asistente(telefono: str, mensaje: str, canal: str, assista
 
 
 def _assistant_id_for_channel(canal: str) -> str:
-    if canal == "whatsapp":
-        return Config.WHATSAPP_DEFAULT_ASSISTANT_ID
     raise ValueError("assistant_id requerido")
 
 

@@ -4,11 +4,15 @@ from typing import Any
 from flask import Blueprint, Response, jsonify, request
 
 from activity_service import record_activity
-from clients import ClientLookupError, get_active_client_by_assistant_id
-from config import Config
+from clients import (
+    ClientLookupError,
+    WhatsAppAccountLookupError,
+    get_active_whatsapp_account_by_phone_number_id,
+    get_active_whatsapp_account_by_verify_token,
+)
 from database import session_scope
 from message_processor import procesar_mensaje_cliente
-from whatsapp_service import WhatsAppServiceError, send_whatsapp_message
+from whatsapp_service import WhatsAppClient, WhatsAppServiceError
 
 
 logger = logging.getLogger(__name__)
@@ -21,13 +25,19 @@ def verify_whatsapp_webhook():
     verify_token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge", "")
 
-    if not Config.WHATSAPP_VERIFY_TOKEN:
-        logger.error("whatsapp_verify_error reason=missing_verify_token")
-        return Response("WhatsApp verify token no configurado.", status=500, mimetype="text/plain")
-
-    if mode == "subscribe" and verify_token == Config.WHATSAPP_VERIFY_TOKEN:
-        logger.info("whatsapp_webhook_verified")
-        return Response(challenge, status=200, mimetype="text/plain")
+    if mode == "subscribe" and verify_token:
+        try:
+            with session_scope() as session:
+                account = get_active_whatsapp_account_by_verify_token(session, verify_token)
+                logger.info(
+                    "whatsapp_webhook_verified client_id=%s phone_number_id=%s",
+                    account.cliente_id,
+                    account.phone_number_id,
+                )
+                return Response(challenge, status=200, mimetype="text/plain")
+        except WhatsAppAccountLookupError:
+            logger.warning("whatsapp_verify_error reason=unknown_verify_token mode=%s", mode or "missing")
+            return Response("Forbidden", status=403, mimetype="text/plain")
 
     logger.warning("whatsapp_verify_error reason=invalid_token mode=%s", mode or "missing")
     return Response("Forbidden", status=403, mimetype="text/plain")
@@ -43,13 +53,30 @@ def receive_whatsapp_message():
         return jsonify({"success": True, "processed": 0})
 
     processed = 0
+    ignored = 0
     for message in messages:
         telefono = message["telefono"]
         texto = message["mensaje"]
         phone_number_id = message.get("phone_number_id", "")
-        assistant_id = _assistant_id_for_phone_number(phone_number_id)
+
+        try:
+            with session_scope() as session:
+                account = get_active_whatsapp_account_by_phone_number_id(session, phone_number_id)
+                assistant_id = account.cliente.assistant_id
+                client_id = account.cliente_id
+                whatsapp_client = WhatsAppClient.from_account(account)
+        except WhatsAppAccountLookupError:
+            logger.warning(
+                "whatsapp_message_ignored reason=unknown_phone_number_id phone_number_id=%s telefono=%s",
+                phone_number_id or "missing",
+                _mask_phone(telefono),
+            )
+            ignored += 1
+            continue
+
         logger.info(
-            "whatsapp_message_received phone_number_id=%s assistant_id=%s telefono=%s message_length=%s",
+            "whatsapp_message_received client_id=%s phone_number_id=%s assistant_id=%s telefono=%s message_length=%s",
+            client_id,
             phone_number_id or "missing",
             assistant_id,
             _mask_phone(telefono),
@@ -63,7 +90,8 @@ def receive_whatsapp_message():
         )
         try:
             with session_scope() as session:
-                cliente = get_active_client_by_assistant_id(session, assistant_id)
+                account = get_active_whatsapp_account_by_phone_number_id(session, phone_number_id)
+                cliente = account.cliente
                 record_activity(
                     session,
                     cliente,
@@ -78,11 +106,11 @@ def receive_whatsapp_message():
                     metadata={"phone_number_id": phone_number_id},
                 )
         except ClientLookupError:
-            logger.warning("whatsapp_activity_client_not_found assistant_id=%s", assistant_id)
-        send_whatsapp_message(telefono, respuesta)
+            logger.warning("whatsapp_activity_client_not_found phone_number_id=%s assistant_id=%s", phone_number_id, assistant_id)
+        whatsapp_client.send_text(telefono, respuesta)
         processed += 1
 
-    return jsonify({"success": True, "processed": processed})
+    return jsonify({"success": True, "processed": processed, "ignored": ignored})
 
 
 def _extract_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -106,19 +134,6 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
                         }
                     )
     return extracted
-
-
-def _assistant_id_for_phone_number(phone_number_id: str) -> str:
-    assistant_id = Config.WHATSAPP_PHONE_ASSISTANT_MAP.get(phone_number_id)
-    if assistant_id:
-        return assistant_id
-
-    logger.info(
-        "whatsapp_phone_number_unmapped phone_number_id=%s fallback_assistant_id=%s",
-        phone_number_id or "missing",
-        Config.WHATSAPP_DEFAULT_ASSISTANT_ID,
-    )
-    return Config.WHATSAPP_DEFAULT_ASSISTANT_ID
 
 
 def _mask_phone(telefono: str) -> str:

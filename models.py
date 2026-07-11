@@ -35,6 +35,26 @@ class Cliente(Base):
     citas: Mapped[List["Cita"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
     horarios: Mapped[List["ClientBusinessHour"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
     actividades: Mapped[List["ActivityInteraction"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
+    whatsapp_accounts: Mapped[List["WhatsAppAccount"]] = relationship(
+        back_populates="cliente",
+        cascade="all, delete-orphan",
+    )
+
+
+class WhatsAppAccount(Base):
+    __tablename__ = "whatsapp_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cliente_id: Mapped[int] = mapped_column(ForeignKey("clientes.id"), nullable=False, index=True)
+    phone_number_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    verify_token: Mapped[str] = mapped_column(String(255), nullable=True, unique=True, index=True)
+    access_token_env_var: Mapped[str] = mapped_column(String(255), nullable=True)
+    access_token: Mapped[str] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    cliente: Mapped[Cliente] = relationship(back_populates="whatsapp_accounts")
 
 
 class Servicio(Base):

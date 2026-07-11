@@ -90,6 +90,28 @@
         <textarea class="ket-input" name="prompt" rows="4">{{ cliente.prompt if cliente else '' }}</textarea>
       </div>
       <div class="col-12">
+        <hr>
+        <h2 class="ket-section-title">WhatsApp</h2>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">phone_number_id</label>
+        <input class="ket-input" name="whatsapp_phone_number_id" value="{{ whatsapp_account.phone_number_id if whatsapp_account else '' }}" placeholder="123456789012345">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">verify_token</label>
+        <input class="ket-input" name="whatsapp_verify_token" value="{{ whatsapp_account.verify_token if whatsapp_account and whatsapp_account.verify_token else '' }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">access_token_env_var</label>
+        <input class="ket-input" name="whatsapp_access_token_env_var" value="{{ whatsapp_account.access_token_env_var if whatsapp_account and whatsapp_account.access_token_env_var else '' }}" placeholder="WHATSAPP_TOKEN_CLIENTE">
+      </div>
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="whatsapp_activo" id="whatsapp_activo" {% if whatsapp_account and whatsapp_account.activo %}checked{% endif %}>
+          <label class="form-check-label" for="whatsapp_activo">WhatsApp activo</label>
+        </div>
+      </div>
+      <div class="col-12">
         <div class="form-check">
           <input class="form-check-input" type="checkbox" name="activo" id="activo" {% if not cliente or cliente.activo %}checked{% endif %}>
           <label class="form-check-label" for="activo">Activo</label>

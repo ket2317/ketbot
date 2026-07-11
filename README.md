@@ -113,18 +113,20 @@ Si falta `assistant_id`, el backend responde:
 
 ## Configurar WhatsApp Cloud API
 
-Variables necesarias:
+Variable global necesaria:
 
 ```env
-WHATSAPP_VERIFY_TOKEN=
-WHATSAPP_TOKEN=
-WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_API_VERSION=v20.0
-WHATSAPP_DEFAULT_ASSISTANT_ID=rpm-automotive
-WHATSAPP_PHONE_ASSISTANT_MAP={"PHONE_NUMBER_ID_1":"rpm-automotive","PHONE_NUMBER_ID_2":"unas-la-comer"}
 ```
 
-No pongas tokens reales en el README. Define esos valores en `.env` local o en Render.
+La configuración multiempresa vive en el panel de cada cliente:
+
+- WhatsApp activo
+- `phone_number_id`
+- `verify_token`
+- `access_token_env_var`
+
+No pongas tokens reales en el README ni en HTML. Define el token real en Render o `.env` usando la variable indicada en `access_token_env_var`.
 
 En Meta WhatsApp Cloud API configura el webhook:
 
@@ -132,9 +134,9 @@ En Meta WhatsApp Cloud API configura el webhook:
 GET/POST https://TU-DOMINIO/whatsapp
 ```
 
-El backend usa `WHATSAPP_VERIFY_TOKEN` para verificar el webhook y responde mensajes entrantes con `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
-`WHATSAPP_DEFAULT_ASSISTANT_ID` define qué cliente de Ket atiende los mensajes de WhatsApp cuando el webhook no trae un identificador de asistente.
-`WHATSAPP_PHONE_ASSISTANT_MAP` permite relacionar cada `metadata.phone_number_id` de WhatsApp Cloud API con el `assistant_id` del cliente correspondiente. Si un `phone_number_id` no existe en el mapa, se usa `WHATSAPP_DEFAULT_ASSISTANT_ID`.
+El backend verifica el webhook buscando `verify_token` en la base de datos. Para mensajes entrantes, usa `metadata.phone_number_id` para ubicar la cuenta WhatsApp activa y el cliente dueño. Si Meta envía un `phone_number_id` desconocido, el backend devuelve HTTP 200 sin procesar ni responder, para evitar mezclar clientes.
+
+Las variables antiguas `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_DEFAULT_ASSISTANT_ID` y `WHATSAPP_PHONE_ASSISTANT_MAP` solo se conservan como compatibilidad temporal para poblar cuentas iniciales si ya existen en el entorno. El webhook no debe depender de ellas en operación normal.
 
 ## Endpoints
 

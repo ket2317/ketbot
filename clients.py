@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from models import Cliente
+from models import Cliente, WhatsAppAccount
 from config import Config
 
 
@@ -15,6 +15,10 @@ class ClientLookupError(Exception):
 
 
 class MissingAssistantIdError(ClientLookupError):
+    pass
+
+
+class WhatsAppAccountLookupError(ClientLookupError):
     pass
 
 
@@ -82,6 +86,44 @@ def get_active_client_by_assistant_id(session: Session, assistant_id: str) -> Cl
     raise ClientLookupError(f"No existe un cliente activo para assistant_id={assistant_id}.")
 
 
+def get_active_whatsapp_account_by_phone_number_id(session: Session, phone_number_id: str) -> WhatsAppAccount:
+    normalized_phone_number_id = str(phone_number_id or "").strip()
+    if not normalized_phone_number_id:
+        raise WhatsAppAccountLookupError("phone_number_id requerido")
+
+    account = session.scalar(
+        select(WhatsAppAccount)
+        .join(WhatsAppAccount.cliente)
+        .where(
+            WhatsAppAccount.phone_number_id == normalized_phone_number_id,
+            WhatsAppAccount.activo.is_(True),
+            Cliente.activo.is_(True),
+        )
+    )
+    if account:
+        return account
+    raise WhatsAppAccountLookupError("No existe una cuenta activa para ese phone_number_id.")
+
+
+def get_active_whatsapp_account_by_verify_token(session: Session, verify_token: str) -> WhatsAppAccount:
+    normalized_verify_token = str(verify_token or "").strip()
+    if not normalized_verify_token:
+        raise WhatsAppAccountLookupError("verify_token requerido")
+
+    account = session.scalar(
+        select(WhatsAppAccount)
+        .join(WhatsAppAccount.cliente)
+        .where(
+            WhatsAppAccount.verify_token == normalized_verify_token,
+            WhatsAppAccount.activo.is_(True),
+            Cliente.activo.is_(True),
+        )
+    )
+    if account:
+        return account
+    raise WhatsAppAccountLookupError("No existe una cuenta activa para ese verify_token.")
+
+
 def seed_initial_clients(session: Session) -> None:
     _upsert_client(
         session,
@@ -114,6 +156,8 @@ def seed_initial_clients(session: Session) -> None:
         prompt="Asistente de Uñas La Comer para agendar citas.",
         activo=True,
     )
+    _ensure_default_business_hours(session)
+    _seed_legacy_whatsapp_accounts(session)
 
 
 def _upsert_client(session: Session, **data: Any) -> None:
@@ -146,6 +190,39 @@ def _ensure_default_business_hours(session: Session) -> None:
                     "breaks_json": "[]",
                 },
             )
+
+
+def _seed_legacy_whatsapp_accounts(session: Session) -> None:
+    legacy_pairs = dict(Config.WHATSAPP_PHONE_ASSISTANT_MAP)
+    if Config.WHATSAPP_PHONE_NUMBER_ID and Config.WHATSAPP_DEFAULT_ASSISTANT_ID:
+        legacy_pairs.setdefault(Config.WHATSAPP_PHONE_NUMBER_ID, Config.WHATSAPP_DEFAULT_ASSISTANT_ID)
+
+    if not legacy_pairs:
+        return
+
+    for phone_number_id, assistant_id in legacy_pairs.items():
+        phone_number_id = str(phone_number_id or "").strip()
+        assistant_id = str(assistant_id or "").strip()
+        if not phone_number_id or not assistant_id:
+            continue
+
+        client = session.scalar(select(Cliente).where(Cliente.assistant_id == assistant_id))
+        if client is None:
+            continue
+
+        existing = session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.phone_number_id == phone_number_id))
+        if existing is not None:
+            continue
+
+        session.add(
+            WhatsAppAccount(
+                cliente_id=client.id,
+                phone_number_id=phone_number_id,
+                verify_token=Config.WHATSAPP_VERIFY_TOKEN if len(legacy_pairs) == 1 else None,
+                access_token_env_var="WHATSAPP_TOKEN" if Config.WHATSAPP_TOKEN else "",
+                activo=True,
+            )
+        )
 
 
 def _nested_id(value: Any) -> str | None:

@@ -32,6 +32,19 @@ def init_db() -> None:
                 "ON citas (cliente_id, fecha, hora)"
             )
         )
+        if inspect(connection).has_table("whatsapp_accounts"):
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_whatsapp_accounts_phone_number_id "
+                    "ON whatsapp_accounts (phone_number_id)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_whatsapp_accounts_verify_token "
+                    "ON whatsapp_accounts (verify_token)"
+                )
+            )
 
 
 def _add_missing_columns() -> None:
@@ -60,6 +73,17 @@ def _add_missing_columns() -> None:
                 "disponible_por_llamada": "BOOLEAN NOT NULL DEFAULT TRUE",
                 "disponible_por_whatsapp": "BOOLEAN NOT NULL DEFAULT TRUE",
                 "notas_internas": "TEXT",
+            },
+        )
+    if inspector.has_table("whatsapp_accounts"):
+        _add_columns(
+            "whatsapp_accounts",
+            {
+                "access_token_env_var": "VARCHAR(255)",
+                "access_token": "TEXT",
+                "activo": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "created_at": "DATETIME",
+                "updated_at": "DATETIME",
             },
         )
 
