@@ -1,0 +1,276 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<section class="ket-client-header">
+  <div>
+    <a class="ket-back-link" href="{{ url_for('admin.services_index', client_id=cliente.id) }}">
+      <i data-lucide="arrow-left"></i>
+      {{ cliente.nombre }}
+    </a>
+    <div class="ket-client-title-row">
+      <h1 class="ket-title-2">Actividad</h1>
+      <span class="ket-badge {{ 'ket-badge-success' if cliente.activo else 'ket-badge-muted' }}">
+        {{ "Activo" if cliente.activo else "Inactivo" }}
+      </span>
+    </div>
+    <p class="ket-text-muted">Consulta el desempeño del asistente, llamadas, servicios solicitados y citas generadas.</p>
+  </div>
+  <div class="ket-actions">
+    <a class="ket-button ket-button-secondary" href="{{ url_for('admin.client_activity_report_pdf', client_id=cliente.id, **request.args) }}">
+      <i data-lucide="file-down"></i>
+      Descargar reporte
+    </a>
+    <a class="ket-button ket-button-primary" href="{{ url_for('admin.client_activity_export_csv', client_id=cliente.id, **request.args) }}">
+      <i data-lucide="download"></i>
+      Exportar CSV
+    </a>
+  </div>
+</section>
+
+<nav class="ket-client-menu" aria-label="Cliente">
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Información del negocio</a>
+  <a href="{{ url_for('admin.client_hours', client_id=cliente.id) }}">Horarios</a>
+  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Servicios</a>
+  <a href="{{ url_for('admin.services_index', client_id=cliente.id) }}">Disponibilidad de servicios</a>
+  <a href="#">Citas</a>
+  <a class="active" href="{{ url_for('admin.client_activity', client_id=cliente.id) }}">Actividad</a>
+  <a href="{{ url_for('admin.client_edit', client_id=cliente.id) }}">Estado del asistente</a>
+</nav>
+
+<form class="ket-card ket-filter-bar" method="get">
+  <div>
+    <label class="form-label">Periodo</label>
+    <select class="ket-input" name="period">
+      <option value="today" {% if period.label == 'today' %}selected{% endif %}>Hoy</option>
+      <option value="last_7_days" {% if period.label == 'last_7_days' %}selected{% endif %}>Últimos 7 días</option>
+      <option value="this_month" {% if period.label == 'this_month' %}selected{% endif %}>Este mes</option>
+      <option value="previous_month" {% if period.label == 'previous_month' %}selected{% endif %}>Mes anterior</option>
+      <option value="custom" {% if period.label == 'custom' %}selected{% endif %}>Rango personalizado</option>
+    </select>
+  </div>
+  <div>
+    <label class="form-label">Inicio</label>
+    <input class="ket-input" type="date" name="start_date" value="{{ request.args.get('start_date', '') }}">
+  </div>
+  <div>
+    <label class="form-label">Fin</label>
+    <input class="ket-input" type="date" name="end_date" value="{{ request.args.get('end_date', '') }}">
+  </div>
+  <div>
+    <label class="form-label">Canal</label>
+    <select class="ket-input" name="channel">
+      <option value="">Todos</option>
+      <option value="vapi" {% if request.args.get('channel') == 'vapi' %}selected{% endif %}>Llamada</option>
+      <option value="whatsapp" {% if request.args.get('channel') == 'whatsapp' %}selected{% endif %}>WhatsApp</option>
+    </select>
+  </div>
+  <div>
+    <label class="form-label">Servicio</label>
+    <select class="ket-input" name="service_id">
+      <option value="">Todos</option>
+      {% for servicio in servicios %}
+      <option value="{{ servicio.id }}" {% if request.args.get('service_id') == servicio.id|string %}selected{% endif %}>{{ servicio.nombre }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="form-label">Resultado</label>
+    <select class="ket-input" name="outcome">
+      <option value="">Todos</option>
+      {% for result in data.outcomes %}
+      <option value="{{ result.outcome }}" {% if request.args.get('outcome') == result.outcome %}selected{% endif %}>{{ result.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="form-label">Buscar</label>
+    <input class="ket-input" name="q" value="{{ request.args.get('q', '') }}" placeholder="Nombre o últimos dígitos">
+  </div>
+  <div class="ket-filter-actions">
+    <button class="ket-button ket-button-primary" type="submit"><i data-lucide="filter"></i>Filtrar</button>
+  </div>
+</form>
+
+<section class="ket-grid ket-metric-grid">
+  {% for metric in data.metrics %}
+  <article class="ket-card ket-metric-card" title="Comparación contra el periodo anterior equivalente.">
+    <span>{{ metric.label }}</span>
+    <strong>{{ metric.value }}</strong>
+    <small class="{{ 'ket-delta-up' if metric.delta and metric.delta > 0 else 'ket-delta-down' if metric.delta and metric.delta < 0 else 'ket-text-muted' }}">
+      {{ metric.delta_label }}
+    </small>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="ket-grid ket-dashboard-grid">
+  <article class="ket-card ket-report-card">
+    <div class="ket-section-header">
+      <div>
+        <h2 class="ket-title-3">Servicios solicitados</h2>
+        <p class="ket-text-muted">Diferencia entre solicitud de servicio y cita confirmada.</p>
+      </div>
+    </div>
+    {% if data.services.rows %}
+      <div class="ket-highlight-row">
+        <span>Más solicitado: <strong>{{ data.services.most_requested }}</strong></span>
+        <span>Mayor conversión: <strong>{{ data.services.highest_conversion }}</strong></span>
+        <span>Más sin disponibilidad: <strong>{{ data.services.most_no_availability }}</strong></span>
+      </div>
+      <div class="ket-table-wrap">
+        <table class="ket-table">
+          <thead>
+            <tr>
+              <th>Servicio</th>
+              <th>Solicitudes</th>
+              <th>%</th>
+              <th>Citas</th>
+              <th>Conversión</th>
+              <th>Cancel.</th>
+              <th>Reag.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in data.services.rows %}
+            <tr>
+              <td>{{ row.service }}</td>
+              <td>{{ row.requests }}</td>
+              <td>{{ "%.1f"|format(row.percent) }}%</td>
+              <td>{{ row.appointments }}</td>
+              <td>{{ "%.1f"|format(row.conversion) }}%</td>
+              <td>{{ row.cancelled }}</td>
+              <td>{{ row.rescheduled }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="ket-empty-state">No hay servicios solicitados en este periodo.</div>
+    {% endif %}
+  </article>
+
+  <article class="ket-card ket-report-card">
+    <h2 class="ket-title-3">Demanda por hora</h2>
+    {% if data.demand.by_hour %}
+      <div class="ket-bar-list">
+        {% for hour, count in data.demand.by_hour.items() %}
+        <div class="ket-bar-row">
+          <span>{{ hour }}</span>
+          <div><i style="width: {{ [count * 12, 100]|min }}%"></i></div>
+          <strong>{{ count }}</strong>
+        </div>
+        {% endfor %}
+      </div>
+      <p class="ket-text-muted">Mayor demanda: {{ data.demand.top_hour }} · Día fuerte: {{ data.demand.top_weekday }}</p>
+    {% else %}
+      <div class="ket-empty-state">No hay demanda registrada en este periodo.</div>
+    {% endif %}
+  </article>
+</section>
+
+<section class="ket-card ket-report-card">
+  <div class="ket-section-header">
+    <div>
+      <h2 class="ket-title-3">Historial de actividad</h2>
+      <p class="ket-text-muted">{{ total }} registros encontrados.</p>
+    </div>
+    <select class="ket-input ket-sort-input" name="sort" form="sort-form" onchange="this.form.submit()">
+      <option value="date_desc">Más reciente</option>
+      <option value="date_asc">Más antiguo</option>
+      <option value="duration_desc">Mayor duración</option>
+      <option value="duration_asc">Menor duración</option>
+    </select>
+  </div>
+  <form id="sort-form" method="get">
+    {% for key, value in request.args.items() %}
+      {% if key != 'sort' %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+  </form>
+  {% if activities %}
+  <div class="ket-table-wrap">
+    <table class="ket-table">
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th>Cliente</th>
+          <th>Teléfono</th>
+          <th>Canal</th>
+          <th>Servicio</th>
+          <th>Resultado</th>
+          <th>Duración</th>
+          <th>Cita</th>
+          <th>Estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in activities %}
+        <tr>
+          <td>{{ item.started_at }}</td>
+          <td>{{ item.customer_name }}</td>
+          <td>{{ item.customer_phone }}</td>
+          <td>{{ item.channel }}</td>
+          <td>{{ item.service }}</td>
+          <td>{{ item.outcome }}</td>
+          <td>{{ item.duration }}</td>
+          <td>{{ item.appointment_id or "-" }}</td>
+          <td>{{ item.status }}</td>
+          <td><button class="ket-button ket-button-ghost" type="button" data-activity-id="{{ item.id }}">Detalles</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="ket-empty-state">No hay actividad para los filtros seleccionados.</div>
+  {% endif %}
+</section>
+
+<dialog class="ket-dialog" id="activity-dialog">
+  <div class="ket-dialog-content">
+    <button class="ket-alert-close" type="button" data-dialog-close><i data-lucide="x"></i></button>
+    <h2 class="ket-title-3">Detalle de actividad</h2>
+    <div id="activity-detail" class="ket-detail-grid">Cargando...</div>
+  </div>
+</dialog>
+
+<script>
+  document.querySelectorAll("[data-activity-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const dialog = document.getElementById("activity-dialog");
+      const detail = document.getElementById("activity-detail");
+      detail.textContent = "Cargando...";
+      dialog.showModal();
+      try {
+        const response = await fetch(`{{ url_for('admin.client_activity', client_id=cliente.id) }}/${button.dataset.activityId}`);
+        const payload = await response.json();
+        if (!payload.success) throw new Error(payload.message || "No se pudo cargar el detalle.");
+        const activity = payload.activity;
+        detail.innerHTML = `
+          <p><strong>Fecha:</strong> ${activity.started_at}</p>
+          <p><strong>Canal:</strong> ${activity.channel}</p>
+          <p><strong>Cliente:</strong> ${activity.customer_name}</p>
+          <p><strong>Teléfono:</strong> ${activity.customer_phone}</p>
+          <p><strong>Duración:</strong> ${activity.duration}</p>
+          <p><strong>Servicio:</strong> ${activity.service}</p>
+          <p><strong>Resultado:</strong> ${activity.outcome}</p>
+          <p><strong>Cita:</strong> ${activity.appointment_id || "-"}</p>
+          <p><strong>Estado:</strong> ${activity.status}</p>
+          <p><strong>ID externo:</strong> ${activity.external_id || "-"}</p>
+          <p><strong>Resumen:</strong> ${activity.summary || "Sin resumen"}</p>
+          <p><strong>Transcripción:</strong> ${activity.transcript || "No disponible"}</p>
+          <p><strong>Error:</strong> ${activity.error_message || "Sin errores"}</p>
+          <p><strong>Línea de tiempo:</strong> ${activity.timeline.map((event) => `${event.occurred_at} · ${event.event_type}`).join("<br>") || "Sin eventos"}</p>
+        `;
+      } catch (error) {
+        detail.textContent = error.message;
+      }
+    });
+  });
+  document.querySelector("[data-dialog-close]")?.addEventListener("click", () => {
+    document.getElementById("activity-dialog").close();
+  });
+</script>
+{% endblock %}

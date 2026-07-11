@@ -305,7 +305,7 @@ def create_appointment(session: Session, cliente: Cliente, payload: dict[str, An
     cita.google_event_id = event.get("id")
     cita.estado = "agendada"
 
-    return {"event": event, "cita": cita}
+    return {"event": event, "cita": cita, "servicio": servicio}
 
 
 def update_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
@@ -347,7 +347,7 @@ def update_appointment(session: Session, cliente: Cliente, payload: dict[str, An
     cita.fecha = start.date()
     cita.hora = start.time().replace(tzinfo=None)
     cita.estado = "agendada"
-    return {"event": event, "cita": cita}
+    return {"event": event, "cita": cita, "servicio": servicio or cita.servicio}
 
 
 def cancel_appointment(session: Session, cliente: Cliente, payload: dict[str, Any]) -> dict[str, Any]:
@@ -362,7 +362,7 @@ def cancel_appointment(session: Session, cliente: Cliente, payload: dict[str, An
         calendar.delete_calendar_event(cita.google_event_id)
 
     cita.estado = "cancelada"
-    return {"cita": cita}
+    return {"cita": cita, "servicio": cita.servicio}
 
 
 def serialize_appointment(cita: Cita) -> dict[str, Any]:

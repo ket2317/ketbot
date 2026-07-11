@@ -3,6 +3,7 @@ from datetime import date
 
 from flask import Blueprint, jsonify, request
 
+from activity_service import record_activity
 from calendar_service import CalendarServiceError
 from clients import (
     ClientLookupError,
@@ -252,6 +253,7 @@ def healthcheck():
                 "/update-appointment",
                 "/cancel-appointment",
                 "/resolve-date",
+                "/vapi/webhook",
                 "/get-services",
                 "/client-prompt",
             ],
@@ -328,6 +330,20 @@ def check_availability():
                 end,
                 servicio=servicio,
                 canal=payload.get("canal"),
+            )
+            record_activity(
+                session,
+                cliente,
+                channel=payload.get("canal") or "vapi",
+                outcome="availability_checked" if available else "no_availability",
+                event_type="availability_checked",
+                external_id=payload.get("call_id") or payload.get("external_id"),
+                customer_phone=payload.get("telefono"),
+                requested_service=servicio,
+                requested_service_name=payload.get("motivo") or payload.get("servicio"),
+                status="completed",
+                summary="Consulta de disponibilidad desde herramienta de asistente.",
+                metadata={"endpoint": "/check-availability", "available": available},
             )
             client_name = cliente.nombre
             logger.info(
@@ -452,6 +468,21 @@ def create_appointment_route():
             )
             result = create_appointment(session, cliente, payload)
             event = result["event"]
+            record_activity(
+                session,
+                cliente,
+                channel=payload.get("canal") or "vapi",
+                outcome="appointment_created",
+                event_type="appointment_created",
+                external_id=payload.get("call_id") or payload.get("external_id"),
+                customer_name=payload.get("nombre"),
+                customer_phone=payload.get("telefono"),
+                requested_service=result.get("servicio"),
+                requested_service_name=payload.get("motivo") or payload.get("servicio"),
+                appointment=result["cita"],
+                summary="Cita creada desde herramienta de asistente.",
+                metadata={"endpoint": "/create-appointment"},
+            )
             logger.info(
                 "appointment_created endpoint=/create-appointment assistant_id=%s cliente_id=%s fecha=%s hora=%s google_event_created=%s",
                 assistant_id,
@@ -569,6 +600,21 @@ def update_appointment_route():
             result = update_appointment(session, cliente, payload)
             cita = result["cita"]
             event = result.get("event") or {}
+            record_activity(
+                session,
+                cliente,
+                channel=payload.get("canal") or "vapi",
+                outcome="appointment_rescheduled",
+                event_type="appointment_rescheduled",
+                external_id=payload.get("call_id") or payload.get("external_id"),
+                customer_name=payload.get("nombre"),
+                customer_phone=payload.get("telefono"),
+                requested_service=result.get("servicio"),
+                requested_service_name=payload.get("motivo") or payload.get("servicio"),
+                appointment=cita,
+                summary="Cita reagendada desde herramienta de asistente.",
+                metadata={"endpoint": "/update-appointment"},
+            )
             logger.info(
                 "appointment_updated endpoint=/update-appointment assistant_id=%s cliente_id=%s cita_id=%s event_id=%s fecha=%s hora=%s",
                 assistant_id,
@@ -678,6 +724,21 @@ def cancel_appointment_route():
             )
             result = cancel_appointment(session, cliente, payload)
             cita = result["cita"]
+            record_activity(
+                session,
+                cliente,
+                channel=payload.get("canal") or "vapi",
+                outcome="appointment_cancelled",
+                event_type="appointment_cancelled",
+                external_id=payload.get("call_id") or payload.get("external_id"),
+                customer_name=payload.get("nombre"),
+                customer_phone=payload.get("telefono"),
+                requested_service=result.get("servicio"),
+                requested_service_name=payload.get("motivo") or payload.get("servicio"),
+                appointment=cita,
+                summary="Cita cancelada desde herramienta de asistente.",
+                metadata={"endpoint": "/cancel-appointment"},
+            )
             logger.info(
                 "appointment_cancelled endpoint=/cancel-appointment assistant_id=%s cliente_id=%s cita_id=%s event_id=%s",
                 assistant_id,
@@ -733,6 +794,91 @@ def resolve_date_route():
         assistant_id or "missing",
         date_text or "missing",
     )
+
+
+@appointments_bp.route("/vapi/webhook", methods=["POST", "OPTIONS"])
+def vapi_webhook_route():
+    if request.method == "OPTIONS":
+        return cors_preflight_response()
+
+    payload, error = get_json_payload()
+    if error:
+        logger.warning("validation_error endpoint=/vapi/webhook error=%s", error)
+        return error_response(error, 415 if "Content-Type" in error else 400)
+
+    assistant_id = extract_assistant_id(payload)
+    if not assistant_id:
+        return assistant_id_error_response()
+
+    event_type = str(payload.get("type") or payload.get("event") or payload.get("status") or "call_completed")
+    call = payload.get("call") if isinstance(payload.get("call"), dict) else {}
+    external_id = str(payload.get("external_id") or payload.get("call_id") or call.get("id") or "").strip() or None
+    customer = call.get("customer") if isinstance(call.get("customer"), dict) else {}
+    telefono = payload.get("telefono") or payload.get("phone") or payload.get("customer_phone") or customer.get("number")
+    status = _activity_status_from_event(event_type)
+    outcome = _activity_outcome_from_event(event_type)
+    duration_seconds = _int_or_none(payload.get("duration_seconds") or call.get("durationSeconds") or call.get("duration_seconds"))
+
+    try:
+        with session_scope() as session:
+            cliente = get_client_for_payload(session, payload)
+            activity = record_activity(
+                session,
+                cliente,
+                channel="vapi",
+                outcome=outcome,
+                event_type=event_type,
+                external_id=external_id,
+                external_event_id=str(payload.get("event_id") or payload.get("message_id") or external_id or ""),
+                customer_name=payload.get("nombre") or payload.get("customer_name"),
+                customer_phone=telefono,
+                status=status,
+                duration_seconds=duration_seconds,
+                summary=payload.get("summary") or _analysis_summary(payload),
+                transcript=payload.get("transcript"),
+                error_code=payload.get("error_code"),
+                error_message=payload.get("error_message"),
+                metadata={"endpoint": "/vapi/webhook"},
+            )
+            return jsonify({"success": True, "activity_id": activity.id})
+    except ClientLookupError as exc:
+        logger.warning("client_lookup_error endpoint=/vapi/webhook assistant_id=%s error=%s", assistant_id, exc)
+        return error_response(str(exc), 404)
+
+
+def _activity_status_from_event(event_type: str) -> str:
+    normalized = event_type.lower()
+    if "fail" in normalized:
+        return "failed"
+    if "abandon" in normalized:
+        return "abandoned"
+    if "start" in normalized:
+        return "started"
+    return "completed"
+
+
+def _activity_outcome_from_event(event_type: str) -> str:
+    normalized = event_type.lower()
+    if "fail" in normalized:
+        return "failed"
+    if "abandon" in normalized:
+        return "abandoned"
+    return "other"
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _analysis_summary(payload: dict) -> str | None:
+    analysis = payload.get("analysis")
+    if not isinstance(analysis, dict):
+        return None
+    summary = analysis.get("summary")
+    return str(summary) if summary else None
     if not assistant_id:
         logger.warning("validation_error endpoint=/resolve-date assistant_id=missing error=assistant_id requerido")
         return assistant_id_error_response()

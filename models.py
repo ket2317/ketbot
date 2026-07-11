@@ -1,8 +1,8 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import List
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -34,6 +34,7 @@ class Cliente(Base):
     servicios: Mapped[List["Servicio"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
     citas: Mapped[List["Cita"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
     horarios: Mapped[List["ClientBusinessHour"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
+    actividades: Mapped[List["ActivityInteraction"]] = relationship(back_populates="cliente", cascade="all, delete-orphan")
 
 
 class Servicio(Base):
@@ -106,3 +107,53 @@ class Cita(Base):
 
     cliente: Mapped[Cliente] = relationship(back_populates="citas")
     servicio: Mapped[Servicio] = relationship(back_populates="citas")
+
+
+class ActivityInteraction(Base):
+    __tablename__ = "activity_interactions"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "channel", "external_id", name="uq_activity_cliente_channel_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cliente_id: Mapped[int] = mapped_column(ForeignKey("clientes.id"), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(255), nullable=True, index=True)
+    customer_name: Mapped[str] = mapped_column(String(160), nullable=True)
+    customer_phone: Mapped[str] = mapped_column(String(40), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    ended_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="completed", index=True)
+    outcome: Mapped[str] = mapped_column(String(80), nullable=False, default="other", index=True)
+    requested_service_id: Mapped[int] = mapped_column(ForeignKey("servicios.id"), nullable=True, index=True)
+    requested_service_name_snapshot: Mapped[str] = mapped_column(String(160), nullable=True)
+    appointment_id: Mapped[int] = mapped_column(ForeignKey("citas.id"), nullable=True, index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=True)
+    transcript: Mapped[str] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(120), nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    cliente: Mapped[Cliente] = relationship(back_populates="actividades")
+    requested_service: Mapped[Servicio] = relationship()
+    appointment: Mapped[Cita] = relationship()
+    events: Mapped[List["ActivityEvent"]] = relationship(back_populates="activity", cascade="all, delete-orphan")
+
+
+class ActivityEvent(Base):
+    __tablename__ = "activity_events"
+    __table_args__ = (
+        UniqueConstraint("activity_id", "event_type", "external_event_id", name="uq_activity_event_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    activity_id: Mapped[int] = mapped_column(ForeignKey("activity_interactions.id"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    external_event_id: Mapped[str] = mapped_column(String(255), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+    activity: Mapped[ActivityInteraction] = relationship(back_populates="events")

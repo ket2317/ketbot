@@ -17,8 +17,15 @@ Por ahora es solo para el administrador de KET. No existe portal público para c
 - `GET /admin/clients/<client_id>/services`: lista servicios del negocio.
 - `GET,POST /admin/clients/<client_id>/services/new`: crea servicio.
 - `GET,POST /admin/services/<service_id>/edit`: edita servicio y disponibilidad.
+- `GET /admin/clients/<client_id>/activity`: dashboard de actividad.
+- `GET /admin/clients/<client_id>/activity/summary`: métricas agregadas del periodo.
+- `GET /admin/clients/<client_id>/activity/list`: lista paginada de actividad.
+- `GET /admin/clients/<client_id>/activity/<activity_id>`: detalle seguro de una actividad.
+- `GET /admin/clients/<client_id>/activity/export.csv`: exportación CSV filtrada.
+- `GET /admin/clients/<client_id>/activity/report.pdf`: reporte PDF del periodo.
 - `POST /admin/clients/<client_id>/toggle`: activa o desactiva negocio.
 - `POST /admin/services/<service_id>/toggle`: activa o desactiva servicio.
+- `POST /vapi/webhook`: webhook opcional para registrar eventos de llamada enviados por Vapi.
 
 Todas las rutas `/admin/` requieren Basic Auth con `ADMIN_USERNAME`, `ADMIN_PASSWORD` y `SECRET_KEY`.
 
@@ -29,6 +36,8 @@ Todas las rutas `/admin/` requieren Basic Auth con `ADMIN_USERNAME`, `ADMIN_PASS
 - `servicios`: catálogo por cliente con precio, duración, canales, estado y notas internas.
 - `service_availability`: disponibilidad por servicio y día.
 - `citas`: citas existentes por cliente.
+- `activity_interactions`: llamadas, conversaciones y acciones del asistente por cliente.
+- `activity_events`: línea de tiempo idempotente de cada interacción.
 
 ## Configurar un cliente
 
@@ -117,6 +126,61 @@ Si no se envía servicio, usa la duración predeterminada del negocio.
 - si hay servicio, usan `servicio.duracion_minutos`;
 - si no hay servicio, usan `cliente.duracion_cita_minutos`;
 - validan horario de negocio y disponibilidad del servicio antes de crear o mover el evento en Google Calendar.
+
+## Actividad y reportes
+
+La sección `Actividad` muestra:
+
+- métricas del periodo;
+- servicios solicitados;
+- demanda por día y hora;
+- resultados de conversación;
+- historial paginado;
+- detalle por actividad;
+- descarga CSV;
+- reporte PDF.
+
+La información siempre se filtra por `client_id`. El teléfono se muestra parcialmente oculto.
+
+Las tools de citas registran actividad cuando ocurre:
+
+- `availability_checked`;
+- `appointment_created`;
+- `appointment_cancelled`;
+- `appointment_rescheduled`.
+
+WhatsApp registra una actividad por mensaje recibido cuando puede identificar el negocio.
+
+Vapi puede enviar eventos a:
+
+```text
+POST /vapi/webhook
+```
+
+El webhook acepta campos como:
+
+- `assistant_id`;
+- `type` o `event`;
+- `call.id` o `external_id`;
+- `telefono` o `customer_phone`;
+- `duration_seconds`;
+- `summary`;
+- `transcript`;
+- `error_code`;
+- `error_message`.
+
+La idempotencia usa `client_id + channel + external_id` para la interacción y `activity_id + event_type + external_event_id` para eventos.
+
+Datos que dependen de que Vapi/WhatsApp los entregue:
+
+- duración exacta de llamada;
+- transcripción;
+- resumen generado por proveedor;
+- estado final de llamada;
+- costo;
+- ID externo confiable.
+
+Si esos datos no llegan, el panel muestra estados vacíos o valores neutros sin inventarlos.
 
 ## Variables de entorno
 

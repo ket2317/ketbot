@@ -7,13 +7,24 @@ from functools import wraps
 from hmac import compare_digest
 from typing import Callable, TypeVar
 
-from flask import Blueprint, Response, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
+from activity_service import (
+    activity_query,
+    dashboard_data,
+    export_csv,
+    generate_pdf_report,
+    load_activities,
+    resolve_period,
+    serialize_activity,
+    serialize_activity_detail,
+)
 from config import Config
 from database import session_scope
-from models import ClientBusinessHour, Cliente, ServiceAvailability, Servicio
+from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio
 
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -185,6 +196,117 @@ def services_index(client_id: int):
             select(Servicio).where(Servicio.cliente_id == client_id).order_by(Servicio.nombre)
         ).all()
         return render_template("admin/services.html", cliente=cliente, servicios=servicios)
+
+
+@admin_bp.get("/clients/<int:client_id>/activity")
+@admin_auth_required
+def client_activity(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            flash("Cliente no encontrado.", "danger")
+            return redirect(url_for("admin.clients_index"))
+        period = resolve_period(request.args, cliente.timezone)
+        data = dashboard_data(session, cliente, period, request.args)
+        activities, total, page, per_page = load_activities(session, cliente, period, request.args)
+        servicios = session.scalars(
+            select(Servicio).where(Servicio.cliente_id == client_id).order_by(Servicio.nombre)
+        ).all()
+        return render_template(
+            "admin/activity.html",
+            cliente=cliente,
+            period=period,
+            data=data,
+            activities=[serialize_activity(item, cliente.timezone) for item in activities],
+            total=total,
+            page=page,
+            per_page=per_page,
+            servicios=servicios,
+        )
+
+
+@admin_bp.get("/clients/<int:client_id>/activity/summary")
+@admin_auth_required
+def client_activity_summary(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            return jsonify({"success": False, "message": "Cliente no encontrado."}), 404
+        period = resolve_period(request.args, cliente.timezone)
+        return jsonify({"success": True, "data": dashboard_data(session, cliente, period, request.args)})
+
+
+@admin_bp.get("/clients/<int:client_id>/activity/list")
+@admin_auth_required
+def client_activity_list(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            return jsonify({"success": False, "message": "Cliente no encontrado."}), 404
+        period = resolve_period(request.args, cliente.timezone)
+        activities, total, page, per_page = load_activities(session, cliente, period, request.args)
+        return jsonify(
+            {
+                "success": True,
+                "items": [serialize_activity(item, cliente.timezone) for item in activities],
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+            }
+        )
+
+
+@admin_bp.get("/clients/<int:client_id>/activity/<int:activity_id>")
+@admin_auth_required
+def client_activity_detail(client_id: int, activity_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            return jsonify({"success": False, "message": "Cliente no encontrado."}), 404
+        activity = session.scalar(
+            select(ActivityInteraction)
+            .where(ActivityInteraction.id == activity_id, ActivityInteraction.cliente_id == cliente.id)
+            .options(selectinload(ActivityInteraction.events))
+        )
+        if activity is None or activity.cliente_id != cliente.id:
+            return jsonify({"success": False, "message": "Actividad no encontrada."}), 404
+        return jsonify({"success": True, "activity": serialize_activity_detail(activity, cliente.timezone)})
+
+
+@admin_bp.get("/clients/<int:client_id>/activity/export.csv")
+@admin_auth_required
+def client_activity_export_csv(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            return Response("Cliente no encontrado.", 404, mimetype="text/plain")
+        period = resolve_period(request.args, cliente.timezone)
+        activities = session.scalars(activity_query(cliente, period, request.args)).all()
+        csv_text = export_csv(list(activities), cliente.timezone)
+        logger.info("admin_report_download type=csv client_id=%s admin=%s", client_id, _admin_name())
+        return Response(
+            csv_text,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="actividad-{cliente.id}.csv"'},
+        )
+
+
+@admin_bp.get("/clients/<int:client_id>/activity/report.pdf")
+@admin_auth_required
+def client_activity_report_pdf(client_id: int):
+    with session_scope() as session:
+        cliente = session.get(Cliente, client_id)
+        if cliente is None:
+            return Response("Cliente no encontrado.", 404, mimetype="text/plain")
+        period = resolve_period(request.args, cliente.timezone)
+        data = dashboard_data(session, cliente, period, request.args)
+        pdf_bytes = generate_pdf_report(cliente, period, data)
+        logger.info("admin_report_download type=pdf client_id=%s admin=%s", client_id, _admin_name())
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="actividad-{cliente.id}.pdf"'},
+        )
 
 
 @admin_bp.route("/clients/<int:client_id>/services/new", methods=["GET", "POST"])

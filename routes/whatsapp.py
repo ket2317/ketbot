@@ -3,7 +3,10 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
+from activity_service import record_activity
+from clients import ClientLookupError, get_active_client_by_assistant_id
 from config import Config
+from database import session_scope
 from message_processor import procesar_mensaje_cliente
 from whatsapp_service import WhatsAppServiceError, send_whatsapp_message
 
@@ -58,6 +61,24 @@ def receive_whatsapp_message():
             canal="whatsapp",
             assistant_id=assistant_id,
         )
+        try:
+            with session_scope() as session:
+                cliente = get_active_client_by_assistant_id(session, assistant_id)
+                record_activity(
+                    session,
+                    cliente,
+                    channel="whatsapp",
+                    outcome=_outcome_from_response(respuesta),
+                    event_type="information_provided",
+                    external_id=message.get("external_id"),
+                    customer_phone=telefono,
+                    status="completed",
+                    summary=respuesta[:500],
+                    transcript=texto[:4000],
+                    metadata={"phone_number_id": phone_number_id},
+                )
+        except ClientLookupError:
+            logger.warning("whatsapp_activity_client_not_found assistant_id=%s", assistant_id)
         send_whatsapp_message(telefono, respuesta)
         processed += 1
 
@@ -81,6 +102,7 @@ def _extract_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
                             "telefono": telefono,
                             "mensaje": mensaje,
                             "phone_number_id": phone_number_id,
+                            "external_id": str(message.get("id", "")).strip(),
                         }
                     )
     return extracted
@@ -103,6 +125,19 @@ def _mask_phone(telefono: str) -> str:
     if len(telefono) <= 4:
         return "****"
     return f"***{telefono[-4:]}"
+
+
+def _outcome_from_response(response: str) -> str:
+    normalized = response.lower()
+    if "agend" in normalized:
+        return "appointment_created"
+    if "cancel" in normalized:
+        return "appointment_cancelled"
+    if "moví" in normalized or "movi" in normalized or "reagend" in normalized:
+        return "appointment_rescheduled"
+    if "disponibilidad" in normalized or "disponible" in normalized:
+        return "availability_checked"
+    return "information_provided"
 
 
 @whatsapp_bp.errorhandler(WhatsAppServiceError)

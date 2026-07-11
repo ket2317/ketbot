@@ -4,7 +4,7 @@ import tempfile
 import base64
 import uuid
 from contextlib import contextmanager
-from datetime import date, time
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,10 +15,11 @@ os.environ["ADMIN_PASSWORD"] = "secret"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from app import app
+from activity_service import dashboard_data, export_csv, generate_pdf_report, load_activities, record_activity, resolve_period
 from config import Config
 from database import session_scope as session_scope_for_test
 from date_resolver import resolve_date_context
-from models import ClientBusinessHour, Cliente, ServiceAvailability, Servicio
+from models import ActivityInteraction, ClientBusinessHour, Cliente, ServiceAvailability, Servicio
 from prompt_service import generate_client_prompt
 from services import (
     AppointmentClarificationError,
@@ -93,9 +94,10 @@ class AppointmentRoutesTest(unittest.TestCase):
         create_appointment.assert_not_called()
 
     @patch("routes.appointments.session_scope", fake_session_scope)
+    @patch("routes.appointments.record_activity")
     @patch("routes.appointments.get_client_for_payload")
     @patch("routes.appointments.create_appointment")
-    def test_create_appointment_normal_request_still_creates(self, create_appointment, get_client):
+    def test_create_appointment_normal_request_still_creates(self, create_appointment, get_client, record_activity):
         get_client.return_value = SimpleNamespace(id=1, nombre="KET", timezone="America/Mexico_City")
         create_appointment.return_value = {
             "event": {"id": "evt_1", "htmlLink": "https://calendar.test/event"},
@@ -118,11 +120,13 @@ class AppointmentRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["success"])
         create_appointment.assert_called_once()
+        record_activity.assert_called_once()
 
     @patch("routes.appointments.session_scope", fake_session_scope)
+    @patch("routes.appointments.record_activity")
     @patch("routes.appointments.get_client_for_payload")
     @patch("routes.appointments.update_appointment")
-    def test_update_appointment_route_uses_update_service(self, update_appointment, get_client):
+    def test_update_appointment_route_uses_update_service(self, update_appointment, get_client, record_activity):
         get_client.return_value = SimpleNamespace(id=1, nombre="KET", timezone="America/Mexico_City")
         update_appointment.return_value = {
             "event": {"htmlLink": "https://calendar.test/updated"},
@@ -144,11 +148,13 @@ class AppointmentRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["success"])
         update_appointment.assert_called_once()
+        record_activity.assert_called_once()
 
     @patch("routes.appointments.session_scope", fake_session_scope)
+    @patch("routes.appointments.record_activity")
     @patch("routes.appointments.get_client_for_payload")
     @patch("routes.appointments.cancel_appointment")
-    def test_cancel_appointment_route_uses_cancel_service(self, cancel_appointment, get_client):
+    def test_cancel_appointment_route_uses_cancel_service(self, cancel_appointment, get_client, record_activity):
         get_client.return_value = SimpleNamespace(id=1, nombre="KET", timezone="America/Mexico_City")
         cancel_appointment.return_value = {
             "cita": SimpleNamespace(id=10, google_event_id="evt_1"),
@@ -167,6 +173,7 @@ class AppointmentRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["success"])
         cancel_appointment.assert_called_once()
+        record_activity.assert_called_once()
 
     def test_phone_with_country_code_matches_phone_without_country_code(self):
         self.assertTrue(phones_match("+52 1 55-5000-0000", "55 5000 0000"))
@@ -511,6 +518,137 @@ class ServiceCatalogTest(unittest.TestCase):
             session.flush()
 
             self.assertEqual(get_active_services(session, client), [])
+
+
+def make_client(session, suffix, name="Actividad"):
+    client = Cliente(
+        nombre=f"{name} {suffix}",
+        assistant_id=f"activity-{suffix}",
+        calendar_id="primary",
+        credentials_file="credentials/test.json",
+        horario_inicio=time(8, 0),
+        horario_fin=time(18, 0),
+        timezone="America/Mexico_City",
+        duracion_cita_minutos=60,
+        activo=True,
+    )
+    session.add(client)
+    session.flush()
+    return client
+
+
+class ActivityServiceTest(unittest.TestCase):
+    def test_activity_isolated_between_businesses_and_filters_by_date(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client_one = make_client(session, suffix + "a")
+            client_two = make_client(session, suffix + "b")
+            record_activity(
+                session,
+                client_one,
+                channel="vapi",
+                outcome="appointment_created",
+                event_type="appointment_created",
+                customer_phone="55 1111 1111",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            record_activity(
+                session,
+                client_two,
+                channel="vapi",
+                outcome="appointment_created",
+                event_type="appointment_created",
+                customer_phone="55 2222 2222",
+                started_at=datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+            )
+            period = resolve_period({"period": "custom", "start_date": "2026-07-10", "end_date": "2026-07-10"}, client_one.timezone)
+            items, total, _page, _per_page = load_activities(session, client_one, period, {})
+
+            self.assertEqual(total, 1)
+            self.assertEqual(items[0].cliente_id, client_one.id)
+
+    def test_conversion_and_service_most_requested(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix)
+            service = Servicio(
+                cliente_id=client.id,
+                nombre="Frenos",
+                duracion_minutos=60,
+                activo=True,
+                requiere_cita=True,
+                disponible_por_llamada=True,
+                disponible_por_whatsapp=True,
+            )
+            session.add(service)
+            session.flush()
+            record_activity(session, client, channel="vapi", outcome="appointment_created", event_type="appointment_created", requested_service=service, status="completed")
+            record_activity(session, client, channel="vapi", outcome="availability_checked", event_type="availability_checked", requested_service=service, status="completed")
+            period = resolve_period({"period": "this_month"}, client.timezone)
+            data = dashboard_data(session, client, period, {})
+
+            conversion = next(metric for metric in data["metrics"] if metric["key"] == "conversion_rate")
+            self.assertEqual(conversion["value"], "50.0%")
+            self.assertEqual(data["services"]["most_requested"], "Frenos")
+
+    def test_previous_period_comparison(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix)
+            record_activity(session, client, channel="vapi", outcome="information_provided", event_type="information_provided", started_at=datetime(2026, 7, 10, 12, 0, tzinfo=UTC))
+            record_activity(session, client, channel="vapi", outcome="information_provided", event_type="information_provided", started_at=datetime(2026, 7, 9, 12, 0, tzinfo=UTC))
+            period = resolve_period({"period": "custom", "start_date": "2026-07-10", "end_date": "2026-07-10"}, client.timezone)
+            data = dashboard_data(session, client, period, {})
+
+            total_calls = next(metric for metric in data["metrics"] if metric["key"] == "total_calls")
+            self.assertNotEqual(total_calls["delta_label"], "Sin periodo anterior")
+
+    def test_duplicate_webhook_external_id_updates_existing_activity(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix)
+            first = record_activity(session, client, channel="vapi", outcome="failed", event_type="call_failed", external_id="call_1", status="failed")
+            second = record_activity(session, client, channel="vapi", outcome="failed", event_type="call_failed", external_id="call_1", status="failed")
+            count = session.query(ActivityInteraction).filter_by(cliente_id=client.id, external_id="call_1").count()
+
+            self.assertEqual(first.id, second.id)
+            self.assertEqual(count, 1)
+
+    def test_failed_calls_and_activity_without_service_or_appointment(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix)
+            record_activity(session, client, channel="vapi", outcome="failed", event_type="call_failed", status="failed")
+            period = resolve_period({"period": "this_month"}, client.timezone)
+            data = dashboard_data(session, client, period, {})
+
+            failed = next(metric for metric in data["metrics"] if metric["key"] == "failed_calls")
+            self.assertEqual(failed["value"], "1")
+
+    def test_csv_pdf_timezone_and_pagination(self):
+        suffix = uuid.uuid4().hex
+        with session_scope_for_test() as session:
+            client = make_client(session, suffix)
+            record_activity(
+                session,
+                client,
+                channel="whatsapp",
+                outcome="information_provided",
+                event_type="information_provided",
+                customer_name="Ana",
+                customer_phone="+52 55 1234 9876",
+                started_at=datetime(2026, 7, 10, 6, 30, tzinfo=UTC),
+            )
+            period = resolve_period({"period": "custom", "start_date": "2026-07-10", "end_date": "2026-07-10"}, client.timezone)
+            items, total, page, per_page = load_activities(session, client, period, {"page": "1", "per_page": "1"})
+            csv_text = export_csv(items, client.timezone)
+            pdf = generate_pdf_report(client, period, dashboard_data(session, client, period, {}))
+
+            self.assertEqual(total, 1)
+            self.assertEqual(page, 1)
+            self.assertEqual(per_page, 1)
+            self.assertIn("***9876", csv_text)
+            self.assertTrue(pdf.startswith(b"%PDF"))
 
 
 class AdminAuthTest(unittest.TestCase):
